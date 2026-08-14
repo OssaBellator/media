@@ -2,23 +2,25 @@
 
 Media is an early implementation of a unified creative workspace for images, video, audio, animation and emerging media.
 
-The project starts from one architectural constraint: **a creative project is the product, not a collection of application-specific files**. Canvas, timeline, audio, motion and agent interfaces should all operate on the same underlying objects and history.
+The architectural constraint is simple: **a creative project is the product, not a collection of application-specific files**. Canvas, timeline, audio, motion and agent interfaces operate on the same underlying objects and history.
 
-## What exists now
+## Current alpha
 
-This initial alpha includes:
+The current implementation includes:
 
-- a versioned **Universal Creative Graph** for projects, assets, compositions, tracks and clips;
-- typed-by-convention graph operations (`node.add`, `node.update`, `edge.add`, etc.) as the mutation boundary;
-- undo/redo history above the graph;
-- portable `.media.json` serialization;
-- a deterministic local intent planner that demonstrates how an AI agent can emit inspectable graph operations;
-- a browser studio shell with **Canvas**, **Cut**, **Agent**, Library and Inspector views;
-- local import and preview for common image, video and audio files;
-- local project export;
+- a versioned **Universal Creative Graph** for projects, assets, compositions, tracks, clips, layers, effects and outputs;
+- validated graph operations (`node.add`, `node.update`, `node.remove`, `edge.add`, `edge.remove`) as the mutation boundary;
+- named transactional operation batches and undo/redo history;
+- a versioned `.media.json` project envelope with support for opening legacy bare-graph files;
+- timeline primitives for move, trim, split and ripple delete;
+- a deterministic local intent planner that emits the same operations future model-backed agents will use;
+- a browser Studio with **Canvas**, **Cut**, **Agent**, Library and Inspector views;
+- browser metadata extraction for image dimensions and audio/video duration/dimensions where supported;
+- IndexedDB persistence for the current project graph and imported local media blobs;
+- project open/export flows and offline-media handling;
 - zero runtime dependencies and local test/build scripts.
 
-The current studio is deliberately dependency-light. This lets the data model and interaction thesis evolve before committing the product to a heavyweight UI/runtime architecture.
+The UI remains deliberately dependency-light while the project model and editing semantics stabilize. Performance-critical decoding, rendering and effects can later move behind WebCodecs/WebGPU/WASM/native boundaries without changing project semantics.
 
 ## Run locally
 
@@ -34,7 +36,7 @@ No package installation is required for the current prototype.
 
 ## Validate locally
 
-GitHub Actions is intentionally not used in this repository. Run the complete local gate before committing:
+GitHub Actions is intentionally not used. Run the complete local gate before committing:
 
 ```bash
 npm run check
@@ -51,32 +53,33 @@ npm run build
 
 ## Try the prototype
 
-1. Import one or more images, videos or audio files.
-2. Select an asset in the Library and inspect it in Canvas.
-3. Open Agent and run **Add everything to the timeline**.
-4. Switch to Cut to see those same asset objects represented as clips.
-5. Try **Make it vertical 9:16**, then undo/redo.
-6. Export the graph as a `.media.json` project file.
+1. Import images, videos or audio. Metadata and media blobs are stored locally in the browser.
+2. Reload the page to verify the project and locally imported media restore from IndexedDB.
+3. Open **Agent** and run **Add everything to the timeline**.
+4. Switch to **Cut**, select a clip and use nudge, trim, split or ripple delete.
+5. Undo/redo those edits to verify they share the graph history layer.
+6. Export the project as `.media.json`, then reopen it with **Open project**.
 
-The Agent tab is **not pretending to be a general AI system** yet. Its planner is deterministic and intentionally small. The important implementation is the operation contract between an intent planner and the project graph; model-backed planners can later target that contract.
+Portable project files intentionally do not embed local media blobs yet. Exported assets retain their metadata but become offline until a future relink/package workflow is implemented.
 
 ## Repository layout
 
 ```text
-apps/studio/          Browser studio shell
-packages/core/        Universal Creative Graph, operations, history, planner
+apps/studio/          Browser studio shell and local IndexedDB storage
+packages/core/        Universal Creative Graph, operations, timeline, history, planner
 packages/core/test/   Node built-in tests
 scripts/              Local dev/build/check tooling
 docs/                 Architecture, decisions and roadmap
 ```
 
-## Current principles
+## Principles
 
 - One project graph, many views.
-- AI proposes operations; it does not bypass project semantics.
-- Every meaningful edit should become reversible and inspectable.
-- Local editing must remain useful without AI credits or a network connection.
+- AI proposes validated operations; it does not bypass project semantics.
+- Every meaningful edit should be reversible and inspectable.
+- Local editing remains useful without AI credits or a network connection.
+- Project formats are versioned and migrations are explicit.
 - Open project data and clean export are product features, not afterthoughts.
-- Performance-critical media engines can move to native/WASM/GPU layers without changing the project model.
+- Media engines may evolve independently behind stable project operations.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and [docs/ROADMAP.md](docs/ROADMAP.md).
