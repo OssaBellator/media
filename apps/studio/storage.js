@@ -8,7 +8,6 @@ function requestResult(request) {
     request.onerror = () => reject(request.error ?? new Error("IndexedDB request failed"));
   });
 }
-
 function transactionDone(transaction) {
   return new Promise((resolve, reject) => {
     transaction.oncomplete = () => resolve();
@@ -16,10 +15,7 @@ function transactionDone(transaction) {
     transaction.onabort = () => reject(transaction.error ?? new Error("IndexedDB transaction aborted"));
   });
 }
-
-export function localAssetUri(assetId) {
-  return `media://asset/${assetId}`;
-}
+export function localAssetUri(assetId) { return `media://asset/${assetId}`; }
 
 export async function openMediaDatabase() {
   if (!("indexedDB" in globalThis)) return null;
@@ -37,37 +33,41 @@ export async function saveStoredGraph(graph) {
   if (!database) return false;
   const transaction = database.transaction("workspace", "readwrite");
   transaction.objectStore("workspace").put({ key: WORKSPACE_KEY, graph, savedAt: new Date().toISOString() });
-  await transactionDone(transaction);
-  database.close();
-  return true;
+  await transactionDone(transaction); database.close(); return true;
 }
-
 export async function loadStoredGraph() {
   const database = await openMediaDatabase();
   if (!database) return null;
   const transaction = database.transaction("workspace", "readonly");
   const record = await requestResult(transaction.objectStore("workspace").get(WORKSPACE_KEY));
-  await transactionDone(transaction);
-  database.close();
-  return record?.graph ?? null;
+  await transactionDone(transaction); database.close(); return record?.graph ?? null;
 }
-
 export async function saveAssetBlob(assetId, blob) {
   const database = await openMediaDatabase();
   if (!database) return false;
   const transaction = database.transaction("assets", "readwrite");
   transaction.objectStore("assets").put({ id: assetId, blob, savedAt: new Date().toISOString() });
-  await transactionDone(transaction);
-  database.close();
-  return true;
+  await transactionDone(transaction); database.close(); return true;
 }
-
 export async function loadAssetBlob(assetId) {
   const database = await openMediaDatabase();
   if (!database) return null;
   const transaction = database.transaction("assets", "readonly");
   const record = await requestResult(transaction.objectStore("assets").get(assetId));
-  await transactionDone(transaction);
-  database.close();
-  return record?.blob ?? null;
+  await transactionDone(transaction); database.close(); return record?.blob ?? null;
 }
+export async function deleteAssetBlob(assetId) {
+  const database = await openMediaDatabase();
+  if (!database) return false;
+  const transaction = database.transaction("assets", "readwrite");
+  transaction.objectStore("assets").delete(assetId);
+  await transactionDone(transaction); database.close(); return true;
+}
+export async function listStoredAssetIds() {
+  const database = await openMediaDatabase();
+  if (!database) return [];
+  const transaction = database.transaction("assets", "readonly");
+  const keys = await requestResult(transaction.objectStore("assets").getAllKeys());
+  await transactionDone(transaction); database.close(); return keys.map(String);
+}
+export async function hasAssetBlob(assetId) { return (await loadAssetBlob(assetId)) !== null; }

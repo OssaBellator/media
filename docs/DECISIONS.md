@@ -1,25 +1,29 @@
-# Early engineering decisions
+# Engineering decisions
 
-## ADR-001: Graph-first project model
+## ADR-001 — Project graph over application files
 
-**Decision:** project state is a graph of creative objects and relationships.
+Canvas, Cut, Motion and Agent share one graph rather than owning separate file formats.
 
-**Reason:** cross-media editing depends on stable identities and relationships that survive switching views. A tree of application-specific documents would recreate suite boundaries inside a single executable.
+## ADR-002 — Operations are the durable mutation boundary
 
-## ADR-002: Agent output is operations
+UI gestures and agent plans emit the same small operation vocabulary. High-level editing helpers return operations rather than mutating graph state.
 
-**Decision:** planners emit project operations rather than directly writing application state.
+## ADR-003 — Validate semantics after atomic batches
 
-**Reason:** operations can be validated, previewed, audited, undone, priced and eventually collaborated on. This keeps model providers replaceable.
+Individual intermediate operations may temporarily create an incomplete relationship (for example adding a clip before adding its reference edge). Semantic invariants are therefore enforced on the completed batch, while schema/application failures still identify their operation index.
 
-## ADR-003: Zero-dependency alpha shell
+## ADR-004 — Keep source blobs outside the project graph
 
-**Decision:** the first browser shell uses native modules and browser APIs.
+The graph stores stable locators and metadata. Large blobs live in a storage adapter. Runtime object URLs are transient.
 
-**Reason:** the current architectural uncertainty is in the project/evaluation model, not component rendering. Avoiding a framework commitment makes the shell replaceable and enables local validation without network package installation.
+## ADR-005 — AI providers do not receive privileged mutation access
 
-## ADR-004: No GitHub Actions
+Provider output must be a validated operation plan. Arbitrary provider output is rejected before it reaches project state.
 
-**Decision:** repository quality gates are local scripts exposed through `npm run check`.
+## ADR-006 — Browser-first does not mean browser-locked
 
-**Reason:** CI is explicitly unavailable for this repository. The scripts are portable so another CI system can call the same gate later without changing project semantics.
+The core contains no DOM/IndexedDB/WebGPU dependencies. Media/runtime adapters live under the Studio application so native/WASM implementations can replace them later.
+
+## ADR-007 — Do not pretend WebCodecs demux exists
+
+WebCodecs support is capability-detected, but container demux is not yet implemented. Browser media elements remain the decode fallback until a real demux/decode pipeline exists.

@@ -1,15 +1,21 @@
 import { addEdge, addNode, assertValidGraph, removeEdge, removeNode, updateNode } from "./graph.js";
 import { createId } from "./id.js";
+import { assertProjectInvariants } from "./invariants.js";
 
 export const OPERATION_TYPES = Object.freeze(["node.add", "node.update", "node.remove", "edge.add", "edge.remove"]);
 const OPERATION_TYPE_SET = new Set(OPERATION_TYPES);
 
-function isRecord(value) {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
+function isRecord(value) { return Boolean(value) && typeof value === "object" && !Array.isArray(value); }
+function requireString(value, label) { if (typeof value !== "string" || !value.length) throw new Error(`${label} must be a non-empty string`); }
 
-function requireString(value, label) {
-  if (typeof value !== "string" || !value.length) throw new Error(`${label} must be a non-empty string`);
+export class OperationBatchError extends Error {
+  constructor(message, { index = -1, operation = null, cause = null, phase = "apply" } = {}) {
+    super(message, cause ? { cause } : undefined);
+    this.name = "OperationBatchError";
+    this.index = index;
+    this.operation = operation;
+    this.phase = phase;
+  }
 }
 
 export function assertValidOperation(operation) {
@@ -25,18 +31,14 @@ export function assertValidOperation(operation) {
       requireString(operation.nodeId, "node.update nodeId");
       if (!isRecord(operation.patch)) throw new Error("node.update requires an object patch");
       break;
-    case "node.remove":
-      requireString(operation.nodeId, "node.remove nodeId");
-      break;
+    case "node.remove": requireString(operation.nodeId, "node.remove nodeId"); break;
     case "edge.add":
       if (!isRecord(operation.edge)) throw new Error("edge.add requires an edge");
       requireString(operation.edge.id, "edge.add edge.id");
       requireString(operation.edge.from, "edge.add edge.from");
       requireString(operation.edge.to, "edge.add edge.to");
       break;
-    case "edge.remove":
-      requireString(operation.edgeId, "edge.remove edgeId");
-      break;
+    case "edge.remove": requireString(operation.edgeId, "edge.remove edgeId"); break;
   }
   return operation;
 }
@@ -44,12 +46,7 @@ export function assertValidOperation(operation) {
 export function createTransaction(label, operations, metadata = {}) {
   if (!Array.isArray(operations)) throw new Error("Transaction operations must be an array");
   operations.forEach(assertValidOperation);
-  return {
-    id: createId("transaction"),
-    label: String(label || "Edit"),
-    operations: [...operations],
-    metadata: { ...metadata },
-  };
+  return { id: createId("transaction"), label: String(label || "Edit"), operations: [...operations], metadata: { ...metadata } };
 }
 
 export function applyOperation(graph, operation) {
@@ -63,22 +60,30 @@ export function applyOperation(graph, operation) {
   }
 }
 
-export function applyOperations(graph, operations) {
+export function preflightOperations(graph, operations, { enforceInvariants = true } = {}) {
   if (!Array.isArray(operations)) throw new Error("Operations must be an array");
-  operations.forEach(assertValidOperation);
+  try { operations.forEach(assertValidOperation); }
+  catch (error) { throw new OperationBatchError(error.message, { cause: error, phase: "schema" }); }
   let next = graph;
   for (let index = 0; index < operations.length; index += 1) {
-    try {
-      next = applyOperation(next, operations[index]);
-    } catch (error) {
-      throw new Error(`Operation batch failed at index ${index} (${operations[index].type}): ${error.message}`, { cause: error });
+    try { next = applyOperation(next, operations[index]); }
+    catch (error) {
+      throw new OperationBatchError(`Operation batch failed at index ${index} (${operations[index].type}): ${error.message}`, { index, operation: operations[index], cause: error });
     }
   }
-  return assertValidGraph(next);
+  try {
+    assertValidGraph(next);
+    if (enforceInvariants) assertProjectInvariants(next);
+  } catch (error) {
+    throw new OperationBatchError(`Operation batch produced an invalid project: ${error.message}`, { cause: error, phase: "invariants" });
+  }
+  return next;
 }
 
-export function applyTransaction(graph, transaction) {
+export function applyOperations(graph, operations, options) { return preflightOperations(graph, operations, options); }
+
+export function applyTransaction(graph, transaction, options) {
   if (!isRecord(transaction)) throw new Error("Transaction must be an object");
   requireString(transaction.label, "Transaction label");
-  return applyOperations(graph, transaction.operations);
+  return applyOperations(graph, transaction.operations, options);
 }

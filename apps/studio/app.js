@@ -1,171 +1,451 @@
 import {
+  PlannerRegistry,
   addAsset,
   applyOperations,
-  assertValidGraph,
+  assertProjectInvariants,
   commit,
   createAsset,
   createHistory,
+  createLayerForAssetOperations,
+  createLocalPlannerProvider,
   createMediaProject,
+  createTrackOperations,
+  createTransport,
+  createEffectOperations,
+  effectsForTarget,
+  evaluateAnimatedTransform,
+  evaluateComposition,
+  insertAssetOperations,
+  keyframeSummary,
+  mediaKindFromMime,
+  moveClipOperations,
   nodesByKind,
   parseProjectFile,
-  planIntent,
+  pauseTransport,
+  planWithProvider,
+  playTransport,
   redo,
+  resetTransformOperations,
   rippleDeleteClipOperations,
+  seekTransport,
   serializeProject,
+  setKeyframeOperations,
+  setPlaybackRateOperations,
+  setTrackStateOperations,
+  slipClipOperations,
+  sourceTimeForClip,
   splitClipOperations,
+  stepTransport,
+  tickTransport,
   timelineDuration,
+  transformForNode,
+  transformNodeOperations,
+  updateEffectOperations,
   trimClipOperations,
-  moveClipOperations,
   undo,
 } from "/packages/core/src/index.js";
+import { mediaCapabilities, probeMedia } from "./media-engine.js";
+import { createCompositor } from "./gpu-compositor.js";
+import { createStudioView, formatTime } from "./view.js";
 import { loadAssetBlob, loadStoredGraph, localAssetUri, saveAssetBlob, saveStoredGraph } from "./storage.js";
 
+const APP_VERSION = "0.3.0";
 const app = document.querySelector("#app");
+const plannerRegistry = new PlannerRegistry().register(createLocalPlannerProvider());
+const capabilities = mediaCapabilities();
+const assetUrls = new Map();
 let history = createHistory(createMediaProject("Untitled project"));
 let workspace = "canvas";
 let selectedId = history.present.projectId;
 let persistenceStatus = "Local workspace ready";
-const assetUrls = new Map();
+let compositorBackend = capabilities.webGpu ? "WebGPU probing" : "Canvas2D";
+let transport = createTransport({ duration: 30, fps: 30 });
+let transportFrame = null;
+let transportLastTick = 0;
 let activity = [{ title: "Project created", detail: "Universal Creative Graph ready for image, video and audio assets.", operations: [] }];
 
 const graph = () => history.present;
 const selectedNode = () => graph().nodes[selectedId] ?? graph().nodes[graph().projectId];
+const composition = () => nodesByKind(graph(), "composition")[0];
 const escapeHtml = (value) => String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#039;");
-
-function mediaGlyph(kind) {
-  return { image: "◫", video: "▶", audio: "≋", music: "♪", vector: "◇", unknown: "·" }[kind] ?? "·";
-}
+const mediaGlyph = (kind) => ({ image: "◫", video: "▶", audio: "≋", music: "♪", vector: "◇", unknown: "·" }[kind] ?? "·");
 
 function formatBytes(bytes = 0) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
+  if (bytes < 1024 ** 3) return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
+  return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
+}
+function currentTimelineDuration() { return Math.max(Number(composition()?.props.duration ?? 30), Math.ceil(timelineDuration(graph(), 0)), 1); }
+function syncTransport() {
+  const comp = composition();
+  transport = createTransport({ ...transport, duration: currentTimelineDuration(), fps: Number(comp?.props.fps ?? 30) });
 }
 
-function previewUri(node) {
-  if (!node || node.kind !== "asset") return "";
-  const uri = String(node.props.uri ?? "");
-  if (uri.startsWith("media://asset/")) return assetUrls.get(node.id) ?? "";
+function previewUri(asset) {
+  if (!asset || asset.kind !== "asset") return "";
+  if (assetUrls.has(asset.id)) return assetUrls.get(asset.id);
+  const uri = String(asset.props.uri ?? "");
+  if (uri.startsWith("media://asset/")) return "";
   return uri;
 }
+function assetForNode(node) {
+  if (!node) return null;
+  if (node.kind === "asset") return node;
+  if (["clip", "layer"].includes(node.kind)) return graph().nodes[node.props.assetId] ?? null;
+  return null;
+}
+function activePreviewAsset() {
+  const direct = assetForNode(selectedNode());
+  if (direct) return direct;
+  try {
+    const plan = evaluateComposition(graph(), { time: transport.time });
+    const active = [...plan.visual].reverse().find((item) => item.kind === "clip");
+    return active ? graph().nodes[active.assetId] : null;
+  } catch { return null; }
+}
 
-function renderPreview(node) {
-  if (!node || node.kind !== "asset") {
-    const composition = nodesByKind(graph(), "composition")[0];
-    return `<div class="composition-frame" style="aspect-ratio:${composition?.props.width ?? 16}/${composition?.props.height ?? 9}"><div class="empty-stage"><div class="stage-mark">M</div><h2>One project, every medium.</h2><p>Import image, video or audio. The same asset can then appear in Canvas, Cut and future workspaces without duplicate project files.</p></div></div>`;
+const studioView = createStudioView({
+  graph, selectedNode, composition, previewUri, currentTimelineDuration,
+  getTransport: () => transport, capabilities, getCompositorBackend: () => compositorBackend,
+});
+
+function cssFilterForNode(node) {
+  const filters = [];
+  for (const effect of effectsForTarget(graph(), node?.id).filter((item) => item.props.enabled !== false)) {
+    const params = effect.props.params ?? {};
+    if (effect.props.effectType === "brightness") filters.push(`brightness(${Number(params.amount ?? 1)})`);
+    if (effect.props.effectType === "contrast") filters.push(`contrast(${Number(params.amount ?? 1)})`);
+    if (effect.props.effectType === "saturation") filters.push(`saturate(${Number(params.amount ?? 1)})`);
+    if (effect.props.effectType === "blur") filters.push(`blur(${Math.max(0, Number(params.radius ?? 4))}px)`);
+    if (effect.props.effectType === "hue") filters.push(`hue-rotate(${Number(params.degrees ?? 0)}deg)`);
   }
-  const uri = escapeHtml(previewUri(node));
-  const label = escapeHtml(node.name);
-  if (!uri) return `<div class="composition-frame"><div class="empty-stage"><h2>${label}</h2><p>The project knows this asset, but its local media is offline. Re-import/relink support is the next storage step.</p></div></div>`;
-  if (node.props.mediaKind === "image") return `<div class="composition-frame media-frame"><img src="${uri}" alt="${label}" /></div>`;
-  if (node.props.mediaKind === "video") return `<div class="composition-frame media-frame"><video src="${uri}" controls playsinline></video></div>`;
-  if (node.props.mediaKind === "audio") return `<div class="composition-frame audio-frame"><div class="audio-art">≋</div><h2>${label}</h2><audio src="${uri}" controls></audio></div>`;
-  return `<div class="composition-frame"><div class="empty-stage"><h2>${label}</h2><p>Preview support for this media kind is not implemented yet.</p></div></div>`;
-}
-
-function renderCanvas() {
-  return `<section class="workspace canvas-workspace"><div class="workspace-toolbar"><span class="eyebrow">CANVAS</span><span class="toolbar-copy">Spatial view of the selected creative object</span></div><div class="stage-wrap">${renderPreview(selectedNode())}</div></section>`;
-}
-
-function renderTimelineControls() {
-  const node = selectedNode();
-  if (node.kind !== "clip") return `<span class="timeline-hint">Select a clip to edit it.</span>`;
-  return `<div class="timeline-actions" style="display:flex;gap:6px;align-items:center;overflow:auto">
-    <button class="quiet-button" data-timeline-action="nudge-back">−1s</button>
-    <button class="quiet-button" data-timeline-action="nudge-forward">+1s</button>
-    <button class="quiet-button" data-timeline-action="trim-start">Trim in +1s</button>
-    <button class="quiet-button" data-timeline-action="trim-end">Trim out −1s</button>
-    <button class="quiet-button" data-timeline-action="split">Split middle</button>
-    <button class="quiet-button" data-timeline-action="ripple-delete">Ripple delete</button>
-  </div>`;
-}
-
-function renderTimeline() {
-  const composition = nodesByKind(graph(), "composition")[0];
-  const tracks = nodesByKind(graph(), "track").sort((a, b) => a.props.order - b.props.order);
-  const clips = nodesByKind(graph(), "clip");
-  const duration = Math.max(Number(composition?.props.duration ?? 30), Math.ceil(timelineDuration(graph(), 0)));
-  const ruler = Array.from({ length: 7 }, (_, index) => `<span style="left:${(index / 6) * 100}%">${Math.round((duration / 6) * index)}s</span>`).join("");
-  return `<div class="timeline-region" style="height:230px;display:grid;grid-template-rows:38px minmax(0,1fr)"><div class="timeline-editbar" style="display:flex;align-items:center;padding:4px 10px;border-top:1px solid var(--line);border-bottom:1px solid var(--line);background:#0d0f12">${renderTimelineControls()}</div><div class="timeline-shell" style="min-height:0"><div class="ruler">${ruler}</div>${tracks.map((track) => {
-    const trackClips = clips.filter((clip) => clip.props.trackId === track.id);
-    return `<div class="track-row"><div class="track-label"><strong>${escapeHtml(track.name)}</strong><span>${escapeHtml(track.props.mediaKind)}</span></div><div class="track-lane">${trackClips.map((clip) => {
-      const left = Math.min(100, (Number(clip.props.start ?? 0) / duration) * 100);
-      const width = Math.max(4, Math.min(100 - left, (Number(clip.props.duration ?? 1) / duration) * 100));
-      const asset = graph().nodes[clip.props.assetId];
-      return `<button class="clip ${clip.id === selectedId ? "selected" : ""}" data-select="${clip.id}" style="left:${left}%;width:${width}%"><span>${mediaGlyph(asset?.props.mediaKind)}</span>${escapeHtml(clip.name)}</button>`;
-    }).join("")}${trackClips.length === 0 ? '<span class="track-empty">Use “Add everything to timeline” in Agent</span>' : ""}</div></div>`;
-  }).join("")}</div></div>`;
-}
-
-function renderCut() {
-  return `<section class="workspace cut-workspace"><div class="workspace-toolbar"><span class="eyebrow">CUT</span><span class="toolbar-copy">Move, trim, split and ripple-delete through graph operations</span></div><div class="cut-preview">${renderPreview(selectedNode())}</div>${renderTimeline()}</section>`;
-}
-
-function renderAgent() {
-  const suggestions = ["Add everything to the timeline", "Make it vertical 9:16", "Rename project to Product launch", "Clear the timeline"];
-  return `<section class="workspace agent-workspace"><div class="agent-hero"><span class="eyebrow">AGENT / LOCAL PLANNER</span><h1>Describe an edit. Inspect the operations.</h1><p>Intent stays separate from mutation. Deterministic rules currently emit the same validated operation batches that future model providers will target.</p></div><form id="agent-form" class="command-box"><textarea id="agent-input" rows="3" placeholder="e.g. Add everything to the timeline"></textarea><div class="command-footer"><div class="suggestions">${suggestions.map((item) => `<button type="button" data-command="${escapeHtml(item)}">${escapeHtml(item)}</button>`).join("")}</div><button class="primary-button" type="submit">Plan & apply</button></div></form><div class="activity-list">${activity.map((item) => `<article class="activity-card"><div><span class="activity-dot"></span><strong>${escapeHtml(item.title)}</strong></div><p>${escapeHtml(item.detail)}</p>${item.operations.length ? `<code>${escapeHtml(item.operations.join("  ·  "))}</code>` : ""}</article>`).join("")}</div></section>`;
-}
-
-function renderAssets() {
-  const assets = nodesByKind(graph(), "asset");
-  if (!assets.length) return `<div class="library-empty"><strong>No media yet</strong><span>Import local files to populate the creative graph.</span></div>`;
-  return assets.map((asset) => `<button class="asset-row ${selectedId === asset.id ? "selected" : ""}" data-select="${asset.id}"><span class="asset-glyph">${mediaGlyph(asset.props.mediaKind)}</span><span class="asset-copy"><strong>${escapeHtml(asset.name)}</strong><small>${escapeHtml(asset.props.mediaKind)} · ${formatBytes(asset.props.size)}</small></span></button>`).join("");
-}
-
-function renderInspector() {
-  const node = selectedNode();
-  return `<aside class="inspector"><div class="panel-heading"><span>INSPECTOR</span><small>${escapeHtml(node.kind)}</small></div><div class="inspector-name">${escapeHtml(node.name)}</div><dl><div><dt>ID</dt><dd title="${escapeHtml(node.id)}">${escapeHtml(node.id.slice(0, 18))}…</dd></div>${Object.entries(node.props).filter(([key]) => key !== "uri").slice(0, 12).map(([key, value]) => `<div><dt>${escapeHtml(key)}</dt><dd>${escapeHtml(value)}</dd></div>`).join("")}</dl><div class="graph-stats"><span><strong>${Object.keys(graph().nodes).length}</strong> nodes</span><span><strong>${Object.keys(graph().edges).length}</strong> edges</span></div></aside>`;
+  return filters.join(" ") || "none";
 }
 
 function render() {
-  const project = graph().nodes[graph().projectId];
-  app.innerHTML = `<div class="shell"><header class="topbar"><div class="brand"><span class="brand-mark">M</span><strong>MEDIA</strong><span class="alpha">ALPHA</span></div><div class="project-title">${escapeHtml(project.name)}</div><div class="top-actions"><button id="undo" class="icon-button" ${history.past.length ? "" : "disabled"} title="Undo">↶</button><button id="redo" class="icon-button" ${history.future.length ? "" : "disabled"} title="Redo">↷</button><button id="export" class="quiet-button">Export project</button><label class="quiet-button file-button">Open project<input id="project-input" type="file" accept=".media.json,application/json" /></label><label class="primary-button file-button">Import media<input id="file-input" type="file" multiple accept="image/*,video/*,audio/*,.svg" /></label></div></header><div class="body-grid"><aside class="left-panel"><nav class="workspace-nav">${[["canvas", "◫", "Canvas"], ["cut", "▤", "Cut"], ["agent", "✦", "Agent"]].map(([id, icon, name]) => `<button data-workspace="${id}" class="${workspace === id ? "active" : ""}"><span>${icon}</span>${name}</button>`).join("")}</nav><div class="library"><div class="panel-heading"><span>LIBRARY</span><small>${nodesByKind(graph(), "asset").length}</small></div><div class="asset-list">${renderAssets()}</div></div></aside><main class="main-panel">${workspace === "canvas" ? renderCanvas() : workspace === "cut" ? renderCut() : renderAgent()}</main>${renderInspector()}</div><footer class="statusbar"><span><i></i>${escapeHtml(persistenceStatus)}</span><span>Graph v${graph().version}</span><span>${history.past.length} edits</span></footer></div>`;
+  syncTransport();
+  app.innerHTML = studioView.render({ workspace, persistenceStatus, history, activity, appVersion: APP_VERSION });
   bindEvents();
+  initCompositorSurface();
+  updateTransportDom();
+}
+
+function colorComponents(hex) {
+  const value = String(hex ?? "#000000").replace("#", "");
+  const normalized = value.length === 3 ? value.split("").map((char) => char + char).join("") : value.padEnd(6, "0").slice(0, 6);
+  const number = Number.parseInt(normalized, 16);
+  if (!Number.isFinite(number)) return [0, 0, 0, 1];
+  return [((number >> 16) & 255) / 255, ((number >> 8) & 255) / 255, (number & 255) / 255, 1];
+}
+async function initCompositorSurface() {
+  const surface = document.querySelector("[data-compositor-surface]");
+  if (!surface) return;
+  try {
+    const compositor = await createCompositor(surface);
+    compositorBackend = compositor.backend === "webgpu" ? "WebGPU compositor" : "Canvas2D compositor";
+    compositor.clear(colorComponents(composition()?.props.background));
+    const badge = document.querySelector(".backend-badge");
+    if (badge) badge.textContent = compositorBackend;
+  } catch { compositorBackend = "Canvas surface"; }
 }
 
 function bindEvents() {
-  document.querySelectorAll("[data-workspace]").forEach((button) => button.addEventListener("click", () => { workspace = button.dataset.workspace; render(); }));
-  document.querySelectorAll("[data-select]").forEach((button) => button.addEventListener("click", () => { selectedId = button.dataset.select; render(); }));
+  document.querySelectorAll("[data-workspace]").forEach((button) => button.addEventListener("click", () => { workspace = button.dataset.workspace; if (!["cut", "motion"].includes(workspace)) stopTransportPlayback(); render(); }));
+  document.querySelectorAll("[data-select]").forEach((button) => button.addEventListener("click", (event) => { if (event.defaultPrevented) return; selectedId = button.dataset.select; render(); }));
   document.querySelectorAll("[data-timeline-action]").forEach((button) => button.addEventListener("click", () => executeTimelineAction(button.dataset.timelineAction)));
+  document.querySelectorAll("[data-add-track]").forEach((button) => button.addEventListener("click", () => addTrack(button.dataset.addTrack)));
+  document.querySelectorAll("[data-track-action]").forEach((button) => button.addEventListener("click", (event) => { event.stopPropagation(); executeTrackAction(button.dataset.trackId, button.dataset.trackAction); }));
+  document.querySelectorAll("[data-canvas-action]").forEach((button) => button.addEventListener("click", () => executeCanvasAction(button.dataset.canvasAction)));
+  document.querySelectorAll("[data-keyframe-prop]").forEach((button) => button.addEventListener("click", () => setSelectedKeyframe(button.dataset.keyframeProp)));
+  document.querySelectorAll("[data-motion-nudge]").forEach((button) => button.addEventListener("click", () => nudgeMotionProperty(button.dataset.motionNudge, Number(button.dataset.delta))));
+  document.querySelectorAll("[data-add-effect]").forEach((button) => button.addEventListener("click", () => addSelectedEffect(button.dataset.addEffect)));
+  document.querySelectorAll("[data-toggle-effect]").forEach((button) => button.addEventListener("click", () => toggleSelectedEffect(button.dataset.toggleEffect)));
+  document.querySelectorAll("[data-transport]").forEach((button) => button.addEventListener("click", () => executeTransportAction(button.dataset.transport)));
+  document.querySelectorAll("[data-rate]").forEach((button) => button.addEventListener("click", () => setSelectedRate(Number(button.dataset.rate))));
+  document.querySelector("[data-insert-selected]")?.addEventListener("click", insertSelectedAtPlayhead);
   document.querySelector("#file-input")?.addEventListener("change", importFiles);
   document.querySelector("#project-input")?.addEventListener("change", importProjectFile);
+  document.querySelector("#relink-input")?.addEventListener("change", relinkSelectedAsset);
   document.querySelector("#export")?.addEventListener("click", exportProject);
   document.querySelector("#undo")?.addEventListener("click", () => { history = undo(history); selectedId = graph().nodes[selectedId] ? selectedId : graph().projectId; persistGraph(); render(); });
   document.querySelector("#redo")?.addEventListener("click", () => { history = redo(history); persistGraph(); render(); });
   document.querySelector("#agent-form")?.addEventListener("submit", (event) => { event.preventDefault(); executeIntent(document.querySelector("#agent-input").value); });
   document.querySelectorAll("[data-command]").forEach((button) => button.addEventListener("click", () => executeIntent(button.dataset.command)));
+  bindTimelineSeek();
+  bindTimelineDragging();
+  bindCanvasDragging();
 }
 
-async function mediaMetadata(file) {
-  if (file.type.startsWith("image/") && "createImageBitmap" in globalThis) {
-    try {
-      const bitmap = await createImageBitmap(file);
-      const metadata = { width: bitmap.width, height: bitmap.height };
-      bitmap.close();
-      return metadata;
-    } catch { return {}; }
-  }
-  if (!file.type.startsWith("video/") && !file.type.startsWith("audio/")) return {};
-  const element = document.createElement(file.type.startsWith("video/") ? "video" : "audio");
-  const url = URL.createObjectURL(file);
+function applyEdit(label, operations, { selectId } = {}) {
   try {
-    const metadata = await new Promise((resolve) => {
-      const done = () => resolve({ duration: Number.isFinite(element.duration) ? element.duration : undefined, width: element.videoWidth || undefined, height: element.videoHeight || undefined });
-      element.addEventListener("loadedmetadata", done, { once: true });
-      element.addEventListener("error", () => resolve({}), { once: true });
-      element.src = url;
-    });
-    return metadata;
-  } finally { URL.revokeObjectURL(url); }
+    const next = applyOperations(graph(), operations);
+    history = commit(history, next, label);
+    if (selectId && next.nodes[selectId]) selectedId = selectId;
+    else if (!next.nodes[selectedId]) selectedId = next.projectId;
+    syncTransport();
+    activity.unshift({ title: label, detail: `${operations.length} validated operation${operations.length === 1 ? "" : "s"} committed atomically.`, operations: operations.map((operation) => operation.type) });
+    persistGraph();
+  } catch (error) {
+    activity.unshift({ title: `${label} failed`, detail: error.message, operations: [] });
+  }
+  render();
+}
+
+function executeCanvasAction(action) {
+  const node = selectedNode();
+  if (action === "add-layer") {
+    const asset = node.kind === "asset" ? node : assetForNode(node);
+    if (!asset) return;
+    const operations = createLayerForAssetOperations(graph(), asset.id);
+    const layer = operations.find((operation) => operation.type === "node.add")?.node;
+    return applyEdit(`Add ${asset.name} to Canvas`, operations, { selectId: layer?.id });
+  }
+  if (node.kind !== "layer" || node.props.role === "marker") return;
+  if (action === "delete") return applyEdit("Remove Canvas layer", [{ type: "node.remove", nodeId: node.id }]);
+  if (action === "reset") return applyEdit("Reset layer transform", resetTransformOperations(graph(), node.id));
+  const transform = transformForNode(node);
+  const patch = {};
+  if (action === "left") patch.x = transform.x - 50;
+  if (action === "right") patch.x = transform.x + 50;
+  if (action === "up") patch.y = transform.y - 50;
+  if (action === "down") patch.y = transform.y + 50;
+  if (action === "rotate-left") patch.rotation = transform.rotation - 15;
+  if (action === "rotate-right") patch.rotation = transform.rotation + 15;
+  if (action === "scale-down") patch.scaleX = patch.scaleY = Math.max(0.1, transform.scaleX - 0.1);
+  if (action === "scale-up") patch.scaleX = patch.scaleY = transform.scaleX + 0.1;
+  if (action === "opacity-down") patch.opacity = transform.opacity - 0.1;
+  if (action === "opacity-up") patch.opacity = transform.opacity + 0.1;
+  if (Object.keys(patch).length) applyEdit("Transform Canvas layer", transformNodeOperations(graph(), node.id, patch));
+}
+
+function setSelectedKeyframe(property) {
+  const node = selectedNode();
+  if (!["layer", "clip"].includes(node.kind)) return;
+  const transform = evaluateAnimatedTransform(node, transport.time);
+  applyEdit(`Set ${property} keyframe`, setKeyframeOperations(graph(), node.id, property, { time: transport.time, value: transform[property], easing: "ease-in-out" }));
+}
+function nudgeMotionProperty(property, delta) {
+  const node = selectedNode();
+  if (!["layer", "clip"].includes(node.kind)) return;
+  const current = evaluateAnimatedTransform(node, transport.time)[property];
+  const hasFrames = (node.props.keyframes?.[property]?.length ?? 0) > 0;
+  const next = property === "opacity" ? Math.min(1, Math.max(0, current + delta)) : property.startsWith("scale") ? Math.max(0.1, current + delta) : current + delta;
+  const operations = hasFrames ? setKeyframeOperations(graph(), node.id, property, { time: transport.time, value: next, easing: "ease-in-out" }) : transformNodeOperations(graph(), node.id, { [property]: next });
+  applyEdit(`${hasFrames ? "Keyframe" : "Adjust"} ${property}`, operations);
+}
+function addSelectedEffect(effectType) {
+  const node = selectedNode();
+  if (!["layer", "clip"].includes(node.kind)) return;
+  const defaults = { brightness: { amount: 1.1 }, contrast: { amount: 1.1 }, saturation: { amount: 1.15 }, blur: { radius: 4 }, hue: { degrees: 15 }, gain: { amount: 1 }, pan: { amount: 0 } };
+  applyEdit(`Add ${effectType} effect`, createEffectOperations(graph(), node.id, { effectType, params: defaults[effectType] ?? {} }));
+}
+function toggleSelectedEffect(effectId) {
+  const effect = graph().nodes[effectId];
+  if (!effect || effect.kind !== "effect") return;
+  applyEdit(`${effect.props.enabled === false ? "Enable" : "Disable"} ${effect.name}`, updateEffectOperations(graph(), effect.id, { enabled: effect.props.enabled === false }));
+}
+
+function addTrack(mediaKind) {
+  applyEdit(`Add ${mediaKind} track`, createTrackOperations(graph(), { mediaKind }));
+}
+function executeTrackAction(trackId, action) {
+  const track = graph().nodes[trackId];
+  if (!track || track.kind !== "track") return;
+  if (action === "mute") applyEdit(`${track.props.muted ? "Unmute" : "Mute"} ${track.name}`, setTrackStateOperations(graph(), track.id, { muted: !track.props.muted }));
+  if (action === "lock") applyEdit(`${track.props.locked ? "Unlock" : "Lock"} ${track.name}`, setTrackStateOperations(graph(), track.id, { locked: !track.props.locked }));
+}
+
+function executeTimelineAction(action) {
+  const clip = selectedNode();
+  if (clip.kind !== "clip") return;
+  const start = Number(clip.props.start ?? 0);
+  const duration = Number(clip.props.duration ?? 0);
+  if (action === "nudge-back") return applyEdit("Move clip back 1s", moveClipOperations(graph(), clip.id, { start: Math.max(0, start - 1), snap: true }));
+  if (action === "nudge-forward") return applyEdit("Move clip forward 1s", moveClipOperations(graph(), clip.id, { start: start + 1, snap: true }));
+  if (action === "trim-start") return applyEdit("Trim clip start", trimClipOperations(graph(), clip.id, { edge: "start", time: start + Math.min(1, duration / 2), snap: true }));
+  if (action === "trim-end") return applyEdit("Trim clip end", trimClipOperations(graph(), clip.id, { edge: "end", time: start + Math.max(duration / 2, duration - 1), snap: true }));
+  if (action === "slip-back") return applyEdit("Slip clip source back", slipClipOperations(graph(), clip.id, { delta: -Math.min(1, Number(clip.props.inPoint ?? 0)) }));
+  if (action === "slip-forward") return applyEdit("Slip clip source forward", slipClipOperations(graph(), clip.id, { delta: 1 }));
+  if (action === "split") {
+    const at = transport.time > start && transport.time < start + duration ? transport.time : start + duration / 2;
+    return applyEdit("Split clip", splitClipOperations(graph(), clip.id, at));
+  }
+  if (action === "ripple-delete") return applyEdit("Ripple delete clip", rippleDeleteClipOperations(graph(), clip.id));
+}
+
+function setSelectedRate(rate) {
+  const clip = selectedNode();
+  if (clip.kind !== "clip") return;
+  applyEdit(`Set clip speed to ${rate}×`, setPlaybackRateOperations(graph(), clip.id, rate));
+}
+function insertSelectedAtPlayhead() {
+  const asset = selectedNode();
+  if (asset.kind !== "asset") return;
+  applyEdit(`Insert ${asset.name} at playhead`, insertAssetOperations(graph(), asset.id, { start: transport.time, ripple: true, snap: true }));
+}
+
+function executeTransportAction(action) {
+  if (action === "toggle") {
+    if (transport.playing) stopTransportPlayback(); else startTransportPlayback();
+    updateTransportDom(); return;
+  }
+  stopTransportPlayback();
+  if (action === "step-back") transport = stepTransport(transport, -1);
+  if (action === "step-forward") transport = stepTransport(transport, 1);
+  if (action === "start") transport = seekTransport(transport, 0);
+  updateTransportDom(); syncPreviewMedia();
+}
+function startTransportPlayback() {
+  transport = playTransport(transport.time >= transport.duration ? seekTransport(transport, 0) : transport);
+  transportLastTick = performance.now();
+  const media = document.querySelector(".cut-preview video, .cut-preview audio");
+  const node = selectedNode();
+  if (media && node.kind === "clip") {
+    try { media.currentTime = sourceTimeForClip(node, transport.time); media.playbackRate = Number(node.props.playbackRate ?? 1); media.play().catch(() => {}); } catch {}
+  }
+  const loop = (now) => {
+    const elapsed = (now - transportLastTick) / 1000;
+    transportLastTick = now;
+    transport = tickTransport(transport, elapsed);
+    updateTransportDom();
+    if (transport.playing) transportFrame = requestAnimationFrame(loop);
+    else { transportFrame = null; document.querySelector(".cut-preview video, .cut-preview audio")?.pause?.(); }
+  };
+  transportFrame = requestAnimationFrame(loop);
+}
+function stopTransportPlayback() {
+  transport = pauseTransport(transport);
+  if (transportFrame) cancelAnimationFrame(transportFrame);
+  transportFrame = null;
+  document.querySelector(".cut-preview video, .cut-preview audio")?.pause?.();
+}
+function updateTransportDom() {
+  const duration = currentTimelineDuration();
+  const ratio = Math.min(1, Math.max(0, transport.time / duration));
+  const shell = document.querySelector(".timeline-shell");
+  if (shell) shell.style.setProperty("--playhead", ratio);
+  const timecode = document.querySelector("#timecode");
+  if (timecode) timecode.textContent = formatTime(transport.time);
+  const play = document.querySelector("#transport-play");
+  if (play) play.textContent = transport.playing ? "❚❚" : "▶";
+  const motionPlayhead = document.querySelector("#motion-playhead");
+  if (motionPlayhead) motionPlayhead.style.left = `${Math.min(100, (transport.time / duration) * 100)}%`;
+  updateAnimatedLayerDom();
+}
+function updateAnimatedLayerDom() {
+  const comp = composition();
+  if (!comp) return;
+  document.querySelectorAll("[data-layer-id]").forEach((element) => {
+    const node = graph().nodes[element.dataset.layerId];
+    if (!node) return;
+    const transform = evaluateAnimatedTransform(node, transport.time);
+    element.style.left = `${50 + (transform.x / Number(comp.props.width)) * 100}%`;
+    element.style.top = `${50 + (transform.y / Number(comp.props.height)) * 100}%`;
+    element.style.opacity = transform.opacity;
+    element.style.transform = `translate(-50%,-50%) rotate(${transform.rotation}deg) scale(${transform.scaleX},${transform.scaleY})`;
+    element.style.clipPath = `inset(${transform.cropTop * 100}% ${transform.cropRight * 100}% ${transform.cropBottom * 100}% ${transform.cropLeft * 100}%)`;
+    element.style.filter = cssFilterForNode(node);
+  });
+}
+
+function syncPreviewMedia() {
+  const media = document.querySelector(".cut-preview video, .cut-preview audio");
+  const node = selectedNode();
+  if (!media || node.kind !== "clip") return;
+  try { media.currentTime = Math.max(0, sourceTimeForClip(node, transport.time)); } catch {}
+}
+
+function bindTimelineSeek() {
+  document.querySelectorAll(".track-lane, [data-seek-ruler]").forEach((element) => element.addEventListener("pointerdown", (event) => {
+    if (event.target.closest(".clip")) return;
+    const rect = element.getBoundingClientRect();
+    const ratio = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
+    stopTransportPlayback();
+    transport = seekTransport(transport, ratio * currentTimelineDuration());
+    updateTransportDom(); syncPreviewMedia();
+  }));
+}
+function bindTimelineDragging() {
+  document.querySelectorAll("[data-clip-id]").forEach((clipElement) => clipElement.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    event.stopPropagation();
+    const clipId = clipElement.dataset.clipId;
+    const clip = graph().nodes[clipId];
+    const lane = clipElement.closest(".track-lane");
+    if (!clip || !lane || graph().nodes[clip.props.trackId]?.props.locked) return;
+    selectedId = clipId;
+    document.querySelectorAll(".clip.selected").forEach((item) => item.classList.remove("selected"));
+    clipElement.classList.add("selected");
+    const startX = event.clientX;
+    const originalStart = Number(clip.props.start ?? 0);
+    const laneWidth = lane.getBoundingClientRect().width;
+    const duration = currentTimelineDuration();
+    let lastStart = originalStart;
+    let moved = false;
+    clipElement.setPointerCapture(event.pointerId);
+    const move = (moveEvent) => {
+      const deltaSeconds = ((moveEvent.clientX - startX) / laneWidth) * duration;
+      lastStart = Math.max(0, originalStart + deltaSeconds);
+      clipElement.style.left = `${Math.min(100, (lastStart / duration) * 100)}%`;
+      moved = Math.abs(moveEvent.clientX - startX) > 2;
+    };
+    const up = () => {
+      clipElement.removeEventListener("pointermove", move);
+      clipElement.removeEventListener("pointerup", up);
+      if (moved) applyEdit("Drag clip", moveClipOperations(graph(), clipId, { start: lastStart, snap: true, tolerance: 0.25 }));
+      else render();
+    };
+    clipElement.addEventListener("pointermove", move);
+    clipElement.addEventListener("pointerup", up, { once: true });
+  }));
+}
+function bindCanvasDragging() {
+  document.querySelectorAll("[data-layer-id]").forEach((layerElement) => layerElement.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    event.stopPropagation();
+    const layerId = layerElement.dataset.layerId;
+    const layer = graph().nodes[layerId];
+    const stage = document.querySelector("[data-canvas-stage]");
+    if (!layer || !stage) return;
+    selectedId = layerId;
+    document.querySelectorAll(".canvas-layer.selected").forEach((item) => item.classList.remove("selected"));
+    layerElement.classList.add("selected");
+    const transform = evaluateAnimatedTransform(layer, transport.time);
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const rect = stage.getBoundingClientRect();
+    const comp = composition();
+    let moved = false;
+    let nextX = transform.x;
+    let nextY = transform.y;
+    layerElement.setPointerCapture(event.pointerId);
+    const move = (moveEvent) => {
+      nextX = transform.x + ((moveEvent.clientX - startX) / rect.width) * Number(comp.props.width);
+      nextY = transform.y + ((moveEvent.clientY - startY) / rect.height) * Number(comp.props.height);
+      const left = 50 + (nextX / Number(comp.props.width)) * 100;
+      const top = 50 + (nextY / Number(comp.props.height)) * 100;
+      layerElement.style.left = `${left}%`; layerElement.style.top = `${top}%`;
+      moved = Math.hypot(moveEvent.clientX - startX, moveEvent.clientY - startY) > 2;
+    };
+    const up = () => {
+      layerElement.removeEventListener("pointermove", move);
+      if (moved) applyEdit("Drag Canvas layer", transformNodeOperations(graph(), layerId, { x: nextX, y: nextY }));
+      else render();
+    };
+    layerElement.addEventListener("pointermove", move);
+    layerElement.addEventListener("pointerup", up, { once: true });
+  }));
 }
 
 async function importFiles(event) {
-  const files = [...event.target.files];
+  const files = [...(event.target.files ?? [])];
   if (!files.length) return;
+  persistenceStatus = `Analyzing ${files.length} media file${files.length === 1 ? "" : "s"}…`; render();
   let next = graph();
   const saved = [];
   for (const file of files) {
-    const metadata = await mediaMetadata(file);
+    const metadata = await probeMedia(file);
     let asset = createAsset({ name: file.name, mimeType: file.type, size: file.size, ...metadata });
     asset = { ...asset, props: { ...asset.props, uri: localAssetUri(asset.id) } };
     next = addAsset(next, asset);
@@ -177,98 +457,86 @@ async function importFiles(event) {
   await persistGraph();
   const newestAsset = nodesByKind(graph(), "asset").at(-1);
   if (newestAsset) selectedId = newestAsset.id;
-  activity.unshift({ title: "Media imported", detail: `${files.length} asset${files.length === 1 ? "" : "s"} added with local metadata and persistent media storage.`, operations: ["node.add", "edge.add", "indexeddb.put"] });
+  activity.unshift({ title: "Media imported", detail: `${files.length} asset${files.length === 1 ? "" : "s"} analyzed, fingerprinted and persisted. Audio assets include lightweight waveform data when decoding is available.`, operations: ["probe", "node.add", "edge.add", "indexeddb.put"] });
   render();
+}
+
+async function relinkSelectedAsset(event) {
+  const assetId = selectedNode().kind === "asset" ? selectedNode().id : null;
+  const file = event.target.files?.[0];
+  if (!assetId || !file) return;
+  const asset = graph().nodes[assetId];
+  const incomingKind = mediaKindFromMime(file.type);
+  if (incomingKind !== asset.props.mediaKind && !(incomingKind === "audio" && asset.props.mediaKind === "music")) {
+    activity.unshift({ title: "Relink rejected", detail: `Expected ${asset.props.mediaKind} media but received ${incomingKind}.`, operations: [] }); render(); return;
+  }
+  persistenceStatus = `Analyzing replacement for ${asset.name}…`; render();
+  const metadata = await probeMedia(file);
+  await saveAssetBlob(asset.id, file);
+  if (assetUrls.has(asset.id)) URL.revokeObjectURL(assetUrls.get(asset.id));
+  assetUrls.set(asset.id, URL.createObjectURL(file));
+  const patch = { uri: localAssetUri(asset.id), mimeType: file.type, size: file.size, ...metadata };
+  applyEdit(`Relink ${asset.name}`, [{ type: "node.update", nodeId: asset.id, patch: { props: patch } }], { selectId: asset.id });
 }
 
 async function importProjectFile(event) {
   const file = event.target.files?.[0];
   if (!file) return;
   try {
+    stopTransportPlayback();
     const parsed = parseProjectFile(await file.text());
     history = createHistory(parsed.graph);
     selectedId = graph().projectId;
     workspace = "canvas";
+    syncTransport(); transport = seekTransport(transport, 0);
     await hydrateAssetUrls();
     await persistGraph();
-    activity.unshift({ title: "Project opened", detail: parsed.migratedFrom ? `Opened and migrated ${parsed.migratedFrom}.` : `Opened Media project file v${parsed.fileVersion}.`, operations: ["deserialize", "validate"] });
-  } catch (error) {
-    activity.unshift({ title: "Project open failed", detail: error.message, operations: [] });
-  }
+    activity.unshift({ title: "Project opened", detail: parsed.migratedFrom ? `Opened and migrated ${parsed.migratedFrom}. Existing local media is automatically matched by stable asset IDs.` : `Opened Media project file v${parsed.fileVersion}.`, operations: ["deserialize", "validate", "hydrate"] });
+  } catch (error) { activity.unshift({ title: "Project open failed", detail: error.message, operations: [] }); }
   render();
 }
 
-function applyEdit(label, operations) {
-  try {
-    const next = applyOperations(graph(), operations);
-    history = commit(history, next, label);
-    activity.unshift({ title: label, detail: `${operations.length} validated operation${operations.length === 1 ? "" : "s"} applied.`, operations: operations.map((operation) => operation.type) });
-    persistGraph();
-  } catch (error) {
-    activity.unshift({ title: `${label} failed`, detail: error.message, operations: [] });
-  }
-  render();
-}
-
-function executeTimelineAction(action) {
-  const clip = selectedNode();
-  if (clip.kind !== "clip") return;
-  const start = Number(clip.props.start ?? 0);
-  const duration = Number(clip.props.duration ?? 0);
-  if (action === "nudge-back") return applyEdit("Move clip back 1s", moveClipOperations(graph(), clip.id, { start: Math.max(0, start - 1) }));
-  if (action === "nudge-forward") return applyEdit("Move clip forward 1s", moveClipOperations(graph(), clip.id, { start: start + 1 }));
-  if (action === "trim-start") return applyEdit("Trim clip start", trimClipOperations(graph(), clip.id, { edge: "start", time: start + Math.min(1, duration / 2) }));
-  if (action === "trim-end") return applyEdit("Trim clip end", trimClipOperations(graph(), clip.id, { edge: "end", time: start + Math.max(duration / 2, duration - 1) }));
-  if (action === "split") return applyEdit("Split clip", splitClipOperations(graph(), clip.id, start + duration / 2));
-  if (action === "ripple-delete") {
-    const operations = rippleDeleteClipOperations(graph(), clip.id);
-    selectedId = graph().projectId;
-    return applyEdit("Ripple delete clip", operations);
-  }
-}
-
-function executeIntent(intent) {
+async function executeIntent(intent) {
   if (!intent?.trim()) return;
   const lower = intent.trim().toLowerCase();
   if (lower === "undo") { history = undo(history); persistGraph(); render(); return; }
   if (lower === "redo") { history = redo(history); persistGraph(); render(); return; }
-  const plan = planIntent(graph(), intent);
-  if (plan.operations.length) {
-    try { history = commit(history, applyOperations(graph(), plan.operations), plan.summary); persistGraph(); }
-    catch (error) { activity.unshift({ title: intent, detail: error.message, operations: [] }); render(); return; }
-  }
-  activity.unshift({ title: intent, detail: plan.summary, operations: plan.operations.map((operation) => operation.type) });
+  try {
+    const plan = await planWithProvider(plannerRegistry.get("local"), graph(), intent, { selectedId, time: transport.time, workspace });
+    if (plan.operations.length) history = commit(history, applyOperations(graph(), plan.operations), plan.summary);
+    activity.unshift({ title: intent, detail: plan.summary, operations: plan.operations.map((operation) => operation.type) });
+    await persistGraph();
+  } catch (error) { activity.unshift({ title: `${intent} failed`, detail: error.message, operations: [] }); }
   render();
 }
 
 function exportProject() {
   const portable = structuredClone(graph());
+  const manifest = [];
   for (const asset of nodesByKind(portable, "asset")) {
-    if (String(asset.props.uri).startsWith("blob:") || String(asset.props.uri).startsWith("media://")) asset.props.uri = "";
+    if (assetUrls.has(asset.id) || String(asset.props.uri).startsWith("media://") || String(asset.props.uri).startsWith("blob:")) asset.props.uri = localAssetUri(asset.id);
+    manifest.push({ id: asset.id, name: asset.name, mediaKind: asset.props.mediaKind, mimeType: asset.props.mimeType, size: asset.props.size, duration: asset.props.duration, width: asset.props.width, height: asset.props.height, hash: asset.props.hash ?? null });
   }
-  const blob = new Blob([serializeProject(portable, { appVersion: "0.2.0", exportedAt: new Date().toISOString() })], { type: "application/json" });
+  const payload = serializeProject(portable, { appVersion: APP_VERSION, exportedAt: new Date().toISOString(), assets: manifest });
+  const blob = new Blob([payload], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
   anchor.download = `${portable.nodes[portable.projectId].name.toLowerCase().replace(/[^a-z0-9]+/g, "-") || "project"}.media.json`;
-  anchor.click();
-  URL.revokeObjectURL(url);
+  anchor.click(); URL.revokeObjectURL(url);
 }
 
 async function persistGraph() {
   try {
+    assertProjectInvariants(graph());
     const saved = await saveStoredGraph(graph());
     persistenceStatus = saved ? "Saved locally" : "Session-only storage";
-  } catch {
-    persistenceStatus = "Local save unavailable";
-  }
+  } catch (error) { persistenceStatus = `Local save unavailable: ${error.message}`; }
 }
-
 async function hydrateAssetUrls() {
   for (const url of assetUrls.values()) URL.revokeObjectURL(url);
   assetUrls.clear();
   await Promise.all(nodesByKind(graph(), "asset").map(async (asset) => {
-    if (!String(asset.props.uri ?? "").startsWith("media://asset/")) return;
     const blob = await loadAssetBlob(asset.id).catch(() => null);
     if (blob) assetUrls.set(asset.id, URL.createObjectURL(blob));
   }));
@@ -278,26 +546,28 @@ async function bootstrap() {
   try {
     const stored = await loadStoredGraph();
     if (stored) {
-      assertValidGraph(stored);
+      assertProjectInvariants(stored);
       history = createHistory(stored);
       selectedId = graph().projectId;
       persistenceStatus = "Restored local workspace";
-      activity[0] = { title: "Workspace restored", detail: "Project graph and locally stored media were restored from IndexedDB.", operations: [] };
+      activity[0] = { title: "Workspace restored", detail: "Project graph and local source blobs were restored from IndexedDB.", operations: [] };
     }
     await hydrateAssetUrls();
-  } catch {
-    persistenceStatus = "Started fresh workspace";
-  }
-  render();
+  } catch (error) { persistenceStatus = `Started fresh workspace: ${error.message}`; }
+  syncTransport(); render();
 }
 
 document.addEventListener("keydown", (event) => {
   const modifier = event.metaKey || event.ctrlKey;
-  if (!modifier || event.key.toLowerCase() !== "z") return;
-  event.preventDefault();
-  history = event.shiftKey ? redo(history) : undo(history);
-  persistGraph();
-  render();
+  if (modifier && event.key.toLowerCase() === "z") {
+    event.preventDefault(); history = event.shiftKey ? redo(history) : undo(history); persistGraph(); render(); return;
+  }
+  if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
+  if (event.code === "Space" && ["cut", "motion"].includes(workspace)) { event.preventDefault(); executeTransportAction("toggle"); }
+  if (event.key === "ArrowLeft" && ["cut", "motion"].includes(workspace)) { event.preventDefault(); executeTransportAction("step-back"); }
+  if (event.key === "ArrowRight" && ["cut", "motion"].includes(workspace)) { event.preventDefault(); executeTransportAction("step-forward"); }
+  if (event.key.toLowerCase() === "m" && ["cut", "motion"].includes(workspace)) { event.preventDefault(); executeIntent(`add marker Marker at ${transport.time.toFixed(3)}s`); }
+  if (event.key.toLowerCase() === "s" && workspace === "cut" && selectedNode().kind === "clip") { event.preventDefault(); executeTimelineAction("split"); }
 });
 
 await bootstrap();

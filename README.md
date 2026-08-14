@@ -1,26 +1,68 @@
 # Media
 
-Media is an early implementation of a unified creative workspace for images, video, audio, animation and emerging media.
+Media is an experimental unified creative workstation for image, video, audio, animation and emerging media.
 
-The architectural constraint is simple: **a creative project is the product, not a collection of application-specific files**. Canvas, timeline, audio, motion and agent interfaces operate on the same underlying objects and history.
+The architectural thesis is simple: **the creative project is the product, not a collection of application-specific files**. Canvas, Cut, Motion and Agent operate on the same Universal Creative Graph, the same assets and the same reversible edit history.
 
-## Current alpha
+## Current milestone — 0.3
 
-The current implementation includes:
+This repository now contains a dependency-light browser Studio plus a framework-independent core engine.
 
-- a versioned **Universal Creative Graph** for projects, assets, compositions, tracks, clips, layers, effects and outputs;
-- validated graph operations (`node.add`, `node.update`, `node.remove`, `edge.add`, `edge.remove`) as the mutation boundary;
-- named transactional operation batches and undo/redo history;
-- a versioned `.media.json` project envelope with support for opening legacy bare-graph files;
-- timeline primitives for move, trim, split and ripple delete;
-- a deterministic local intent planner that emits the same operations future model-backed agents will use;
-- a browser Studio with **Canvas**, **Cut**, **Agent**, Library and Inspector views;
-- browser metadata extraction for image dimensions and audio/video duration/dimensions where supported;
-- IndexedDB persistence for the current project graph and imported local media blobs;
-- project open/export flows and offline-media handling;
-- zero runtime dependencies and local test/build scripts.
+### Universal Creative Graph
 
-The UI remains deliberately dependency-light while the project model and editing semantics stabilize. Performance-critical decoding, rendering and effects can later move behind WebCodecs/WebGPU/WASM/native boundaries without changing project semantics.
+- projects, assets, compositions, tracks, clips, layers, effects and outputs;
+- explicit containment/reference/target relationships;
+- structural validation plus semantic project invariants;
+- atomic, preflighted operation batches with failure diagnostics;
+- history/undo/redo above the mutation boundary;
+- versioned `.media.json` project files with legacy bare-graph migration.
+
+### Canvas
+
+- shared visual assets can be placed as nondestructive Canvas layers;
+- drag positioning plus scale, rotation and opacity controls;
+- reusable transform model including anchors and crop values;
+- nondestructive brightness/contrast/blur effect stacks;
+- feature-detected WebGPU compositor surface with Canvas2D fallback.
+
+### Cut
+
+- multi-track timeline;
+- frame-based transport/playhead;
+- click-to-seek and keyboard transport;
+- draggable clips with edit-point snapping;
+- trim, split, slip and ripple delete;
+- ripple insert at the playhead;
+- playback-rate changes that preserve source range;
+- track mute/lock state and lock enforcement;
+- marker snapping;
+- audio waveform display where browser decoding is available.
+
+### Motion
+
+- numeric keyframes on shared layer/clip properties;
+- linear, hold and eased interpolation primitives;
+- keyframe lanes tied to the same transport as Cut;
+- animated transform evaluation in the composition engine;
+- effect stacks and animation are included in render-plan evaluation rather than flattened output.
+
+### Media/persistence
+
+- browser metadata probing for image/video/audio;
+- sampled SHA-256 source fingerprints;
+- audio waveform extraction;
+- IndexedDB project and source-blob persistence;
+- stable `media://asset/<id>` source locators;
+- relink/replace-source workflow;
+- project exports include an asset manifest while keeping media external.
+
+### Agent boundary
+
+The current local planner is deliberately deterministic. The important implementation is the **provider contract**:
+
+`intent -> provider -> validated operations -> semantic invariants -> project graph`
+
+A frontier model can be plugged into that boundary later without receiving an unrestricted mutation channel.
 
 ## Run locally
 
@@ -32,54 +74,50 @@ npm run dev
 
 Open `http://127.0.0.1:4173`.
 
-No package installation is required for the current prototype.
+There are currently no runtime package dependencies and no installation step is needed.
 
 ## Validate locally
 
-GitHub Actions is intentionally not used. Run the complete local gate before committing:
+GitHub Actions is intentionally not used. The repository owns its local validation gate:
 
 ```bash
 npm run check
 ```
 
-The gate runs syntax checks, core tests and a static production build. Individual commands:
+That runs:
 
 ```bash
 npm run syntax:check
 npm test
-npm run test:watch
 npm run build
 ```
 
-## Try the prototype
+The current suite contains 38 core/browser-module tests and uses Node's built-in test runner.
 
-1. Import images, videos or audio. Metadata and media blobs are stored locally in the browser.
-2. Reload the page to verify the project and locally imported media restore from IndexedDB.
-3. Open **Agent** and run **Add everything to the timeline**.
-4. Switch to **Cut**, select a clip and use nudge, trim, split or ripple delete.
-5. Undo/redo those edits to verify they share the graph history layer.
-6. Export the project as `.media.json`, then reopen it with **Open project**.
+## Keyboard controls
 
-Portable project files intentionally do not embed local media blobs yet. Exported assets retain their metadata but become offline until a future relink/package workflow is implemented.
+In Cut or Motion:
+
+- `Space` — play/pause
+- `Left` / `Right` — previous/next frame
+- `M` — add a marker at the playhead
+- `S` — split the selected clip at the playhead (Cut)
+- `Cmd/Ctrl+Z` — undo
+- `Cmd/Ctrl+Shift+Z` — redo
 
 ## Repository layout
 
 ```text
-apps/studio/          Browser studio shell and local IndexedDB storage
-packages/core/        Universal Creative Graph, operations, timeline, history, planner
-packages/core/test/   Node built-in tests
-scripts/              Local dev/build/check tooling
-docs/                 Architecture, decisions and roadmap
+apps/studio/             Browser Studio and browser media/runtime adapters
+apps/studio/test/        Browser-module tests runnable in Node where possible
+packages/core/src/       Universal Creative Graph and editing/evaluation engine
+packages/core/test/      Core unit/integration tests
+scripts/                 Dependency-free dev/build/check tooling
+docs/                    Architecture, engine contracts, decisions and roadmap
 ```
 
-## Principles
+## Engineering principle
 
-- One project graph, many views.
-- AI proposes validated operations; it does not bypass project semantics.
-- Every meaningful edit should be reversible and inspectable.
-- Local editing remains useful without AI credits or a network connection.
-- Project formats are versioned and migrations are explicit.
-- Open project data and clean export are product features, not afterthoughts.
-- Media engines may evolve independently behind stable project operations.
+The UI is not the source of truth. A mouse drag, keyboard shortcut, agent plan, plugin, collaborative edit or future native frontend should all eventually converge on the same validated operation and evaluation contracts.
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and [docs/ROADMAP.md](docs/ROADMAP.md).
+See `docs/ARCHITECTURE.md`, `docs/ENGINE.md`, `docs/PROJECT_FORMAT.md`, `docs/DECISIONS.md` and `docs/ROADMAP.md`.
