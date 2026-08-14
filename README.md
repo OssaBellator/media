@@ -4,42 +4,47 @@ Media is an experimental unified creative workstation for image, video, audio, a
 
 The architectural thesis is simple: **the creative project is the product, not a collection of application-specific files**. Canvas, Cut, Motion, Deliver and Agent are views over the same Universal Creative Graph, shared source media and reversible edit history.
 
-## Current milestone — 0.5
+## Current milestone — 0.6
 
-0.5 begins the production-media-kernel layer underneath the 0.4 creative engine.
+0.6 moves the production kernel from structural container inspection to usable byte-range demux, browser codec adapters and real output writers.
 
 ### Creative/editor layer
 
-- Universal Creative Graph with semantic invariants and atomic operations;
-- Canvas with source, text and native vector layers;
-- Cut with multi-track move/trim/split/slip/duplicate/ripple/roll/blade editing;
-- Motion keyframes and nondestructive effects;
-- audio gain/pan/fades and browser preview mixing;
-- Deliver output nodes, deterministic render manifests and local still rendering;
-- local and HTTP planner-provider boundaries;
-- IndexedDB projects, media sources, derived artifacts and fingerprint relinking.
+The 0.4/0.5 editor foundation remains: Universal Creative Graph, Canvas, multi-track Cut, Motion keyframes/effects, audio editing, Deliver render manifests/stills, Agent provider boundaries, IndexedDB media/derived storage and resumable render jobs.
 
-### Media kernel — 0.5
+### Native demux paths
 
-- versioned kernel task/result/error/progress protocol;
-- cancellable kernel handler runtime;
-- browser Worker client plus inline fallback;
-- container sniffing and normalized demux/track/chunk descriptors;
-- real RIFF/WAVE metadata parsing and PCM/float WAV decoding;
-- ISO-BMFF box, `ftyp` and movie-header parsing for MP4/MOV structural inspection;
-- EBML variable-integer/element parsing and WebM header inspection;
-- keyframe-aware seek indexes and directional decode-prefetch windows;
-- offline Float32 PCM resampling and gain/pan/fade mixing primitives;
-- proxy/thumbnail/waveform derivative planning with deterministic keys;
-- mux sample interleaving and keyframe-aligned segment planning;
-- resumable chunked render jobs with retry/interruption recovery;
-- production render DAG: source verification → derivatives → frame/audio render → encode → mux.
+- classic non-fragmented MP4/MOV sample tables: `stsd`, `stts`, `ctts`, `stsc`, `stsz`/`stz2`, `stco`/`co64`, `stss`;
+- common fragmented MP4: `trex`, `tfhd`, `tfdt`, `trun` with byte-range/sample timing indexes;
+- H.264 `avcC` decoder descriptions and RFC6381-style AVC codec strings;
+- AAC `esds` AudioSpecificConfig extraction for WebCodecs decoder configuration;
+- WebM Segment/Info/Tracks/Cluster/Cues parsing;
+- SimpleBlock and BlockGroup extraction;
+- no/fixed/Xiph/EBML lacing support;
+- normalized encoded chunk descriptors with source byte offsets, DTS/PTS and keyframe state.
+
+### Decode / encode runtime
+
+- WebCodecs video and audio decoder adapters consuming demuxed chunk descriptors;
+- WebCodecs video/audio encoder adapters producing mux-ready copied encoded chunks;
+- transferable-safe Worker kernel tasks instead of cloning away the posted buffers;
+- bounded priority Worker pool with keyed deduplication, cancellation and idle tracking;
+- playhead-oriented keyframe-safe prefetch controller;
+- runtime capability/support checks so unsupported codecs fail explicitly rather than silently falling back.
+
+### Output paths
+
+- actual PCM/IEEE-float WAV writer, including 8/16/24/32-bit PCM and float32 output;
+- in-memory WebM writer for VP8/VP9/AV1 video plus Opus/Vorbis audio;
+- WebM clusters, SimpleBlocks and keyframe Cues;
+- generated WebM files round-trip through Media's own WebM demuxer in local tests;
+- existing semantic mux plans remain the boundary for future MP4 and streaming writers.
 
 ### Deliberate boundary
 
-0.5 does **not** claim full MP4/MOV/WebM demux or encoded video export. MP4/MOV inspection currently parses container boxes/brands/movie timing; WebM inspection parses EBML structure and DocType. Full sample tables/clusters, codec-specific descriptions, WebCodecs encoded-chunk feeding, production encoders and final container writers remain the next kernel work.
+0.6 still does **not** claim a complete professional container stack. MP4 edit lists are not applied yet, unusual fragmented-MP4 base-offset inheritance needs broader conformance fixtures, HEVC/AV1 codec configuration coverage can be deeper, and an actual MP4 binary mux writer is still outstanding. The current WebM writer is in-memory rather than streaming.
 
-WAV is different: uncompressed PCM/IEEE-float WAV parsing and decode are implemented in the core kernel.
+Those are now implementation gaps above a working demux/decode/encode contract rather than missing architecture.
 
 ## Run locally
 
@@ -87,7 +92,7 @@ In Cut or Motion:
 ```text
 apps/studio/             Browser Studio and browser/runtime/kernel adapters
 apps/studio/test/        Runtime-module tests runnable in Node
-packages/core/src/       Creative semantics plus media-kernel contracts/parsers/planners
+packages/core/src/       Creative semantics plus media-kernel contracts/parsers/writers
 packages/core/test/      Core unit/integration tests
 scripts/                 Dependency-free dev/build/check tooling
 docs/                    Architecture, engine/kernel contracts, project format, roadmap

@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.6.0
+
+- Added classic MP4/MOV sample-table demux for `stsd`, `stts`, `ctts`, `stsc`, `stsz`/`stz2`, `stco`/`co64` and `stss`.
+- Added common fragmented-MP4 indexing for `trex`, `tfhd`, `tfdt` and `trun` samples.
+- Added AVC decoder-description parsing and AAC AudioSpecificConfig extraction.
+- Added WebM Tracks/Info/Cluster/Cues, SimpleBlock/BlockGroup and fixed/Xiph/EBML lacing demux.
+- Added actual PCM/float WAV encoding and round-trip coverage.
+- Added browser WebCodecs video/audio decode and encode adapters.
+- Added priority Worker-pool scheduling, keyed task deduplication, cancellation and playhead prefetch planning.
+- Fixed the kernel transfer boundary so Worker payload ArrayBuffers can be posted zero-copy without cloning away the transferred object.
+- Added a recursive transferable collector for ArrayBuffers and browser media objects.
+- Added an actual in-memory WebM writer for VP8/VP9/AV1 + Opus/Vorbis with keyframe Cues.
+- Added end-to-end WebM mux → demux round-trip coverage.
+- Added 33 focused local 0.6 regression tests across demux, codec adapters, workers and writers.
+
 ## 0.5.0
 
 - Added a versioned media-kernel task protocol and cancellable handler runtime.
