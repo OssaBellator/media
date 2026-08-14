@@ -1,4 +1,4 @@
-import { readFile, open, stat } from 'node:fs/promises';
+import { readFile, writeFile, open, stat } from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
@@ -6,6 +6,7 @@ import { demuxIsoBmffAutoSource } from '../packages/core/src/isobmff-auto-range.
 import { createMemoryRangeSource } from '../packages/core/src/range-source.js';
 import { demuxWebmSource } from '../packages/core/src/webm-range.js';
 import { runConformanceFixture, summarizeConformanceRuns, validateCorpusManifest } from '../packages/core/src/conformance-corpus.js';
+import { createConformancePerformanceReport, comparePerformanceReports } from '../packages/core/src/performance-report.js';
 
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const manifest=JSON.parse(await readFile(path.join(root,'conformance/corpus.json'),'utf8'));
@@ -25,4 +26,4 @@ function syntheticFmp4(){const avcC=box('avcC',new Uint8Array([1,100,0,31]));con
 async function sourceFactory(fixture){if(fixture.generated?.type==='synthetic-fmp4')return createMemoryRangeSource(syntheticFmp4(),{id:fixture.id});const filename=path.resolve(corpusDir,fixture.path);const info=await stat(filename);const handle=await open(filename,'r');return new FileRangeSource(handle,Number(info.size),fixture.id);}
 async function demux(source,fixture){const ext=path.extname(fixture.path??'').toLowerCase();if(ext==='.webm')return demuxWebmSource(source);return demuxIsoBmffAutoSource(source,{container:ext==='.mov'?'mov':'mp4'});}
 const runs=[];for(const fixture of manifest.fixtures){let source=null;try{const run=await runConformanceFixture(fixture,{sourceFactory:async(value)=>{source=await sourceFactory(value);return source;},demux});runs.push(run);const mark=run.status==='passed'?'PASS':run.status==='skipped'?'SKIP':'FAIL';console.log(`${mark.padEnd(4)} ${fixture.id}${run.reason?` — ${run.reason}`:''}`);if(run.violations?.length)for(const violation of run.violations)console.log(`     ${JSON.stringify(violation)}`);}finally{await source?.close?.().catch(()=>{});}}
-const summary=summarizeConformanceRuns(runs);console.log(`\nConformance: ${summary.passed} passed, ${summary.failed} failed, ${summary.skipped} skipped (${summary.total} total)`);if(summary.failed)process.exitCode=1;
+const summary=summarizeConformanceRuns(runs),report={...createConformancePerformanceReport(runs),generatedAt:new Date().toISOString(),environment:{node:process.version,platform:process.platform,arch:process.arch,corpusDir}};console.log(`\nConformance: ${summary.passed} passed, ${summary.failed} failed, ${summary.skipped} skipped (${summary.total} total)`);const reportPath=process.env.MEDIA_CONFORMANCE_REPORT;if(reportPath){const target=path.resolve(reportPath);await writeFile(target,JSON.stringify(report,null,2));console.log(`Performance report: ${target}`);}const baselinePath=process.env.MEDIA_CONFORMANCE_BASELINE;if(baselinePath){const baseline=JSON.parse(await readFile(path.resolve(baselinePath),'utf8')),comparison=comparePerformanceReports(report,baseline,{maxRegressionRatio:Number(process.env.MEDIA_MAX_REGRESSION??.15)});for(const check of comparison.checks)console.log(`${check.pass?'PASS':'FAIL'} regression ${check.metric}: ${check.current.toFixed(3)} vs ${check.baseline.toFixed(3)} (${(check.regressionRatio*100).toFixed(1)}%)`);if(!comparison.pass)process.exitCode=1;}if(summary.failed)process.exitCode=1;if(process.env.MEDIA_REQUIRE_CORPUS==='1'&&summary.skipped){console.error(`Strict corpus mode: ${summary.skipped} fixture${summary.skipped===1?'':'s'} skipped`);process.exitCode=1;}

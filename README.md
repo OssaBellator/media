@@ -4,45 +4,57 @@ Media is an experimental unified creative workstation for image, video, audio, a
 
 The architectural thesis remains: **the creative project is the product, not a collection of application-specific files**. Canvas, Cut, Motion, Deliver and Agent are views over one Universal Creative Graph, reversible history and a shared media-kernel contract.
 
-## Current milestone — 0.10
+## Current milestone — 0.11
 
-0.10 closes the production boundaries left after the bounded/resumable 0.9 engine.
+0.11 hardens the 0.10 production architecture around long-running, live, protected and high-dynamic-range media instead of adding another workspace.
 
-### Sparse and live container IO
+### Live and bounded media IO
 
-- classic MP4/MOV and common WebM remain range-indexed;
-- fragmented MP4 now has a sparse `moov` + `moof` index for the common CMAF/default-base-is-moof path, leaving `mdat` unread until sample fetch;
-- ambiguous/unsupported fragment layouts retain the explicit bounded compatibility fallback;
-- `LiveWebmClusterIndexer` incrementally indexes append-only unknown-size Clusters, waits on partial trailing blocks and does not emit completed frames twice.
+- classic MP4/MOV, common fragmented MP4 and WebM remain sparse/range indexed;
+- append-only sources expose an absolute byte address space, backpressure, wait-for-size and explicit pruning;
+- HTTP live transport resumes with byte ranges and rejects servers that would duplicate an already-received stream;
+- live WebM combines the append source with incremental unknown-size Cluster indexing;
+- CMAF segments can be indexed independently and acknowledged/evicted without retaining one ever-growing source buffer.
 
-### Range-driven compressed audio
+### Protected-media inspection without hidden DRM behavior
 
-Deliver can derive source-time ranges from the audio mix plan, range-index AAC/Opus sources, compact only the required encoded chunks, decode through WebCodecs and copy `AudioData` directly into sparse `f32-planar` PCM blocks. The existing whole-Blob `AudioContext.decodeAudioData()` path is compatibility fallback rather than the preferred compressed-source render path.
+- fragmented MP4 inspection understands `encv`/`enca`, `sinf`, `schm`, `tenc`, `senc`, `saiz`, `saio`, `sgpd(seig)`, `sbgp` and `pssh` metadata;
+- default and sample-group KIDs, IVs, pattern-encryption state and subsample maps are exposed to the media kernel;
+- protected samples fail with typed `ERR_ENCRYPTED_MEDIA` before codec submission unless an authorized decryptor is explicitly injected;
+- the decryptor contract operates on exact selected sample ranges and returns clear bytes; Media does not ship key acquisition, DRM policy or decryption algorithms.
 
-### GPU render graph + HDR working space
+### Streaming classic MP4 finalization
 
-- evaluated plans now carry blend/mask/transition state;
-- the WebGPU reference graph accepts source layers plus rasterized text/shapes;
-- alpha masks, crossfade/wipe/dip transitions and normal/multiply/screen/overlay/add/darken/lighten composition are represented explicitly;
-- intermediate composition uses `rgba16float` ping-pong targets;
-- PQ/HLG transfer helpers and explicit ACES/Reinhard/Hable/clip tone-map policies live in core;
-- HDR upload remains capability-gated: the engine does not claim an 8-bit browser upload is scene-linear HDR.
+A completed resumable render no longer needs to be materialized into memory before distribution:
 
-### Resumable render → classic MP4
+```text
+IndexedDB render checkpoints
+  -> lazy composite range source
+  -> sparse fMP4 sample index
+  -> fast-start moov/co64 tables
+  -> one-sample-at-a-time payload reads
+  -> output byte sink
+```
 
-Completed fMP4 render checkpoints can be exposed as one virtual range source, re-indexed without first concatenating input parts, and finalized into a normal fast-start/classic MP4. The reference final rewrite is currently in-memory and guarded by a payload cap.
+The writer preserves signed composition offsets, delayed track starts through `edts/elst`, codec descriptions, rotation, pixel aspect, nclx color and CLLI/MDCV HDR metadata. Consecutive same-track samples share MP4 chunk-table entries rather than forcing one `co64` record per sample.
 
-### Codec portability
+### GPU/HDR fidelity
 
-Kernel codec tasks route through a ranked backend registry. Browser WebCodecs is built in; desktop/native and WASM codecs can be injected through the same decode/encode contract. Only explicit `ERR_CODEC_UNSUPPORTED` results fall through automatically.
+- masks can use alpha or luma semantics and a feather radius;
+- composition keeps `rgba16float` intermediate targets and destination-sampled blend modes;
+- native/WASM backends may inject explicitly linear RGBA16 frames into a half-float texture path;
+- linear HDR frames require an explicit tone-map policy before presentation; ordinary browser `VideoFrame` upload remains a separate browser-managed path rather than being described as guaranteed scene-linear HDR.
 
-### Conformance corpus
+### Codec and conformance health
 
-`npm run conformance` runs the bundled deterministic fixture and any optional real-media corpus present under `MEDIA_CORPUS_DIR`. The manifest covers camera, screen-recording, CMAF/live-stream and audio-only categories with metadata and performance budgets. Missing optional fixtures are skips, not passes.
+- codec backends retain conservative unsupported-only fallback and now track failures, successes and temporary quarantine state;
+- `npm run conformance` can emit JSON performance reports and compare p50/p95/p99 metrics against a baseline;
+- `MEDIA_REQUIRE_CORPUS=1` makes missing external fixtures fail the run instead of remaining optional skips;
+- large camera/device fixtures remain out of tree under `MEDIA_CORPUS_DIR`.
 
-## Deliberate 0.10 boundaries
+## Deliberate 0.11 boundaries
 
-This is still a browser reference engine, not a claim of full shipping NLE conformance. Sparse fMP4 focuses on common fragment addressing; exotic base-data-offset/sample-group/encryption layouts need broader coverage. Live WebM is an append-aware indexer, not a network transport. GPU masks are currently alpha/non-feathered and some complex effects still fall back. Browser HDR source ingestion cannot be assumed scene-linear; explicit/native upload adapters remain the path to guaranteed HDR fidelity. Classic MP4 finalization currently rewrites in memory. Native/WASM codec implementations and large real-camera fixtures are integration points, not bundled binaries.
+Media still does not bundle DRM/key systems, native codec binaries, WASM codec binaries or a large copyrighted camera corpus. CENC support is metadata plus an injected clear-sample boundary, not decryption. The live HTTP helper is byte transport, not a DASH/HLS manifest client. HDR display calibration/OS output control remains outside the browser reference path. Complex vector mattes and spatially varying feather kernels still need a deeper GPU graph. Real shipping confidence still depends on downstream native backends and a much larger cross-device corpus.
 
 ## Run locally
 
@@ -55,10 +67,17 @@ npm run check
 npm run conformance
 ```
 
-Set `MEDIA_CORPUS_DIR=/path/to/media-corpus` to run optional real-media fixtures.
+Optional conformance controls:
+
+```sh
+MEDIA_CORPUS_DIR=/path/to/media-corpus npm run conformance
+MEDIA_CONFORMANCE_REPORT=artifacts/report.json npm run conformance
+MEDIA_CONFORMANCE_BASELINE=baseline.json MEDIA_MAX_REGRESSION=.10 npm run conformance
+MEDIA_REQUIRE_CORPUS=1 MEDIA_CORPUS_DIR=/path/to/full-corpus npm run conformance
+```
 
 ## Engineering principle
 
-The UI is not the source of truth. Gestures, agents, Workers, range sources, codec backends, GPU passes, derivative jobs and resumable render checkpoints converge on the same graph/evaluation/kernel contracts.
+The UI is not the source of truth. Gestures, agents, Workers, range sources, codec/decryptor backends, GPU passes, derivative jobs and resumable render checkpoints converge on the same graph/evaluation/kernel contracts.
 
-See `docs/ARCHITECTURE.md`, `docs/ENGINE.md`, `docs/KERNEL.md`, `docs/SOURCE_IO.md`, `docs/PLAYBACK.md`, `docs/EXPORT.md`, `docs/GPU.md`, `docs/AUDIO.md`, `docs/CODECS.md`, `docs/CONFORMANCE.md`, `docs/PROJECT_FORMAT.md`, `docs/DECISIONS.md` and `docs/ROADMAP.md`.
+See `docs/ARCHITECTURE.md`, `docs/ENGINE.md`, `docs/KERNEL.md`, `docs/SOURCE_IO.md`, `docs/LIVE_MEDIA.md`, `docs/PLAYBACK.md`, `docs/EXPORT.md`, `docs/GPU.md`, `docs/AUDIO.md`, `docs/CODECS.md`, `docs/CONFORMANCE.md`, `docs/PROJECT_FORMAT.md`, `docs/DECISIONS.md` and `docs/ROADMAP.md`.

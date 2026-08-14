@@ -2,33 +2,36 @@
 
 The kernel turns source bytes and evaluated creative intent into deterministic media work without coupling the Universal Creative Graph to browser APIs.
 
-## 0.10 production path
+## 0.11 production path
 
 ```text
-range source
-  -> classic MP4 / sparse fMP4 / sparse WebM / live WebM index
-  -> encoded windows
+static / append / lazy range source
+  -> classic MP4 / sparse fMP4 / static-live WebM / CMAF session
+  -> clear or protected encoded sample descriptors
+  -> optional authorized decryptSample boundary
   -> codec backend router
        native | WebCodecs | WASM
   -> decoded media
   -> composition render graph
   -> encode
   -> resumable fragments
-  -> classic finalization / streaming delivery
+  -> streaming classic finalization / progressive delivery
 ```
 
-### Fragmented MP4
+## Common Encryption inspection
 
-The sparse fragment index reads top-level headers, `moov` and individual `moof` boxes. `tfhd/tfdt/trun` information is mapped back to absolute source byte offsets while `mdat` remains unread. The implementation targets common CMAF/default-base-is-moof layouts. Unsupported/ambiguous layouts may use the existing explicit bounded fallback.
+The fMP4 index can surface protected `encv`/`enca` sample entries and the associated `sinf/schm/tenc`, `senc`, `saiz/saio`, `sgpd(seig)`, `sbgp` and `pssh` information. Per-sample descriptors carry KID, IV, pattern state and subsample ranges where available. Structurally inconsistent subsample maps are rejected before an injected decryptor is invoked.
 
-### Live WebM
+This is not a DRM implementation. PSSH data remains opaque initialization metadata and Media never invents keys or silently submits protected bytes to ordinary decoder work.
 
-`LiveWebmClusterIndexer` is stateful across source growth. Unknown-size Clusters remain open; partial element/block tails wait for more bytes; completed block ranges are emitted once. It is an indexer over an appendable range source, not a networking protocol.
+## Live media
 
-### Codec backends
+Append sources provide backpressure and pruning. Live WebM indexing survives partial tails. CMAF sessions treat complete media segments as individually evictable sparse sources. Networking is an adapter above these contracts.
 
-Codec work uses `CodecBackendRegistry`. Backends declare operations and priority, may probe support, and return the same kernel-facing results. `ERR_CODEC_UNSUPPORTED` is the only automatic fallback signal by default. Native/WASM implementations are injectable integration points; Media does not ship codec binaries in this repository.
+## Codec backends
 
-### HDR/GPU
+Codec work uses `CodecBackendRegistry`. Backends declare operations/priority, may probe support and return the same kernel-facing results. Unsupported is a capability result; repeated real failures can affect backend health/quarantine state.
 
-The reference WebGPU graph composes in `rgba16float` and owns an explicit output tone-map pass. Browser source uploads remain capability-gated because structural HDR metadata does not by itself guarantee a scene-linear external-image conversion.
+## HDR/GPU
+
+The reference graph composes in `rgba16float`. Browser external-image upload and explicit native/WASM linear-half-float upload are separate paths. Linear HDR presentation requires a tone-map policy rather than assuming the output surface understands scene-linear values.

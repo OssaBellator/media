@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.11.0
+
+- Added append-only range sources with backpressure, wait-for-size, pruning and ReadableStream pumping.
+- Added resumable HTTP byte transport plus bounded live WebM and CMAF session primitives.
+- Added CENC inspection for protected sample entries, track/sample-group encryption, IV/subsample metadata, auxiliary-info tables and PSSH initialization data without bundling decryption.
+- Added typed encrypted-media failures plus an injected exact-sample decryptor boundary shared by Cut and range-driven offline audio.
+- Added a streaming fast-start classic MP4 writer/finalizer that emits sample payloads directly to a sink instead of rebuilding the final file in memory.
+- Added lazy IndexedDB checkpoint range sources so resumable render segments are loaded only when the finalizer touches their byte ranges.
+- Preserved signed composition offsets, leading track delays, codec descriptions, rotation, pixel aspect and color/HDR metadata through streaming finalization.
+- Reduced classic MP4 chunk-table growth by grouping consecutive same-track payload runs.
+- Added luma/alpha feather masks, explicit linear RGBA16 native/WASM ingest and mandatory tone-map policy for linear HDR presentation.
+- Added codec backend health/quarantine tracking and percentile/baseline conformance performance reports.
+- Added strict external-corpus mode plus 0.11 regressions for live transport, protected media, lazy/streaming finalization, HDR ingest and backend health.
+
 ## 0.10.0
 
 - Added sparse fragmented-MP4 range indexing for common CMAF/default-base-is-moof files without materializing `mdat` payloads.

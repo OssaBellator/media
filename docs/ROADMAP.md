@@ -1,23 +1,24 @@
 # Roadmap
 
-## 0.10 — production boundary closure
+## 0.11 — production depth
 
-- sparse common fMP4 indexing;
-- append-aware unknown-size WebM Cluster indexing;
-- range-driven compressed offline audio;
-- richer GPU blend/mask/transition/intrinsic graph;
-- float working targets and explicit HDR tone mapping;
-- resumable fMP4 → classic MP4 finalization;
-- codec backend portability contract;
-- deterministic + external real-media conformance harness.
+- CENC/PSSH/sample-group inspection and typed protected-media boundaries;
+- injected exact-sample decryptor contract without bundled DRM/key acquisition;
+- append-only source backpressure/pruning and resumable HTTP byte transport;
+- live WebM and bounded CMAF session primitives;
+- lazy checkpoint storage reads;
+- streaming fast-start classic MP4 finalization with presentation metadata preservation;
+- feathered alpha/luma masks and explicit linear RGBA16 HDR ingest;
+- codec backend health/quarantine;
+- percentile/baseline conformance reporting and strict corpus mode.
 
 ## Next hardening
 
-1. broader fragmented-MP4 features: encryption/sample groups, complex base offsets and multi-description fragments;
-2. true streaming/network source lifecycle for live WebM/CMAF;
-3. guaranteed scene-linear HDR upload path and display calibration metadata;
-4. feather/vector masks, track mattes and richer transition/effect graphs;
-5. seekable classic MP4 writer that does not retain the final payload in memory;
-6. ship/benchmark real native or WASM codec backends in downstream targets;
-7. grow the real-media corpus across browsers, GPUs, cameras and operating systems;
-8. collaborative operation-log/history architecture and production render distribution.
+1. broader CENC auxiliary-data addressing and encrypted real-media corpus coverage;
+2. DASH/HLS/WebTransport adapters above the live byte/session contracts;
+3. production platform color management, display calibration and HDR output surfaces;
+4. vector/path masks, track mattes, motion blur and higher-quality multi-pass feather/blur kernels;
+5. larger classic-MP4 table stress tests and configurable interleave/chunk duration policy;
+6. ship and benchmark real native/WASM codec backends in downstream targets;
+7. expand camera/device/browser/GPU conformance fixtures and retain longitudinal performance baselines;
+8. crash-safe persistent operation log, collaboration and distributed render execution.

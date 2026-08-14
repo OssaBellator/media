@@ -1,26 +1,35 @@
 # Source IO
 
-Media consumers depend on an async range contract:
+Media consumers depend on an async absolute-range contract:
 
 ```text
 source.size
 source.read(offset, length, { signal }) -> Uint8Array
 ```
 
-Blob, HTTP Range, memory, composite and paged-cache sources implement this contract.
+Memory, Blob, HTTP Range, paged-cache, eager composite, lazy composite and append-only sources implement compatible semantics.
 
-## MP4/MOV
+## Static sources
 
-Classic MP4 reads top-level headers plus `ftyp/moov`; sample payload is requested later from absolute `stco/co64` ranges. 0.10 adds sparse fragmented MP4: `moov` is read once and each `moof` is parsed independently to resolve `tfhd/tfdt/trun` samples. Common `default-base-is-moof` addressing is sparse; unsupported fragment addressing retains an explicit bounded fallback.
+Classic MP4/MOV reads top-level headers plus `ftyp/moov`; sample payload is requested later from absolute `stco/co64` ranges. Fragmented MP4 reads the init metadata and individual `moof` structures while leaving referenced `mdat` sample bytes untouched until decode/finalization. Static WebM reads EBML metadata plus block/lacing prefixes while skipping compressed frame bodies.
 
-## WebM
+## Append-only sources
 
-Static WebM reads metadata plus block/lacing prefixes. The live indexer extends this to append-only unknown-size Clusters. Partial tails are not corruption; a later refresh continues from the previous cursor.
+`AppendRangeSource` gives growing media an absolute address space with:
+
+- `waitForSize()` for partial arrivals;
+- high/low-water backpressure;
+- cross-chunk reads;
+- cancellation;
+- `pruneBefore()` for already-consumed data;
+- retained/read byte statistics.
+
+Pruning changes the earliest readable absolute offset, not the absolute end offset. This makes reconnect/resume byte positions stable during a long session.
 
 ## Encoded windows
 
-Chunk descriptors are selected before source bytes. Adjacent source ranges are coalesced, compacted into one transferable buffer and descriptors are rewritten to buffer-local offsets.
+Chunk descriptors are selected before source bytes. Adjacent source ranges are coalesced, copied into one bounded transferable buffer and rewritten to buffer-local offsets. Protected samples use the same range boundary but require an injected decryptor before clear bytes can enter codec work.
 
 ## Composite sources
 
-`CompositeRangeSource` exposes multiple byte artifacts as one logical source. Resumable MP4 finalization uses this to parse `init + media segments` without first concatenating them.
+`CompositeRangeSource` exposes fixed artifacts as one logical source. `LazyCompositeRangeSource` does the same while loading only touched parts and maintaining a bounded part cache. Resumable MP4 finalization uses the lazy form so persisted checkpoint segments are not all fetched from IndexedDB up front.
