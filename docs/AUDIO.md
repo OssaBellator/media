@@ -1,23 +1,23 @@
-# Offline audio, automation and loudness
+# Audio engine
 
-## Automation
+Interactive playback still uses Web Audio scheduling, gain/pan/fades and the shared timeline clock.
 
-Automation curves are persistent numeric points with linear, hold, ease-in, ease-out and ease-in-out interpolation. Core helpers emit normal graph operations for clip gain/pan and output master-gain automation, preserving the same mutation boundary used elsewhere in Media.
+## Range-driven offline decode
 
-`renderAutomatedMix` evaluates automation in sample time while applying source in-points, source/output sample-rate conversion, playback rate, gain, constant-power pan and fades.
+For compressed AAC/Opus sources, offline Deliver now prefers:
 
-## Loudness
+```text
+mix-plan source spans
+  -> sparse container index
+  -> overlapping encoded chunks only
+  -> compact range reads
+  -> codec decoder
+  -> AudioData.copyTo(f32-planar)
+  -> close AudioData
+  -> sparse PCM blocks
+  -> automated offline mix
+```
 
-The reference analyzer:
+Sparse PCM blocks preserve absolute source sample offsets, so disjoint clip references do not require decoding or allocating the gaps between them. Whole-Blob `AudioContext.decodeAudioData()` remains a compatibility fallback for unsupported source/container/backend combinations.
 
-- resamples analysis to 48 kHz;
-- applies the BS.1770 K-weighting pre-filter and RLB stage;
-- evaluates 400 ms blocks at 100 ms steps by default;
-- applies the -70 LUFS absolute gate and -10 LU relative gate;
-- uses standard 5.1/7.1 surround weighting defaults with LFE excluded;
-- reports sample peak and a 4× windowed-sinc intersample peak estimate;
-- can derive gain toward a target integrated loudness while respecting a configured peak ceiling.
-
-## Accuracy boundary
-
-The implementation is deterministic and useful for product development/export normalization, but it is not presented as a certified EBU R128/ATSC meter. The intersample estimator is not a standards-certified true-peak filter, channel-layout metadata is still minimal, and the current offline browser path materializes the final PCM mix before loudness normalization.
+Loudness analysis/normalization remains an engineering BS.1770-style reference, not a certified broadcast meter.

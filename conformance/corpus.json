@@ -1,0 +1,121 @@
+{
+  "version": 1,
+  "description": "Media production conformance corpus. Large camera/device fixtures are supplied out-of-tree via MEDIA_CORPUS_DIR.",
+  "fixtures": [
+    {
+      "id": "synthetic-cmaf-avc",
+      "kind": "generated",
+      "generated": {
+        "type": "synthetic-fmp4"
+      },
+      "expected": {
+        "container": "mp4",
+        "trackCount": 1,
+        "videoCodec": "avc1",
+        "width": 16,
+        "height": 16
+      },
+      "budgets": {
+        "maxIndexMs": 1000,
+        "maxReadAmplification": 128
+      }
+    },
+    {
+      "id": "iphone-hevc-hdr-mov",
+      "kind": "camera",
+      "path": "iphone/hevc-hdr.mov",
+      "optional": true,
+      "expected": {
+        "container": "mov",
+        "videoCodec": "hvc1"
+      },
+      "budgets": {
+        "maxIndexMs": 5000,
+        "maxReadAmplification": 4
+      }
+    },
+    {
+      "id": "android-h264-aac-mp4",
+      "kind": "camera",
+      "path": "android/h264-aac.mp4",
+      "optional": true,
+      "expected": {
+        "container": "mp4",
+        "videoCodec": "avc1",
+        "audioCodec": "mp4a"
+      },
+      "budgets": {
+        "maxIndexMs": 5000,
+        "maxReadAmplification": 4
+      }
+    },
+    {
+      "id": "sony-xavcs-mp4",
+      "kind": "camera",
+      "path": "sony/xavcs.mp4",
+      "optional": true,
+      "expected": {
+        "container": "mp4"
+      },
+      "budgets": {
+        "maxIndexMs": 5000,
+        "maxReadAmplification": 4
+      }
+    },
+    {
+      "id": "obs-vp9-opus-webm",
+      "kind": "screen-recording",
+      "path": "obs/vp9-opus.webm",
+      "optional": true,
+      "expected": {
+        "container": "webm",
+        "videoCodec": "vp09",
+        "audioCodec": "opus"
+      },
+      "budgets": {
+        "maxIndexMs": 5000,
+        "maxReadAmplification": 4
+      }
+    },
+    {
+      "id": "cmaf-avc-aac-fmp4",
+      "kind": "stream",
+      "path": "cmaf/avc-aac.mp4",
+      "optional": true,
+      "expected": {
+        "container": "mp4"
+      },
+      "budgets": {
+        "maxIndexMs": 5000,
+        "maxReadAmplification": 4
+      }
+    },
+    {
+      "id": "live-unknown-cluster-webm",
+      "kind": "stream",
+      "path": "webm/live-unknown-cluster.webm",
+      "optional": true,
+      "expected": {
+        "container": "webm"
+      },
+      "budgets": {
+        "maxIndexMs": 5000,
+        "maxReadAmplification": 4
+      }
+    },
+    {
+      "id": "aac-audio-only-m4a",
+      "kind": "audio",
+      "path": "audio/aac.m4a",
+      "optional": true,
+      "expected": {
+        "container": "mp4",
+        "audioCodec": "mp4a"
+      },
+      "budgets": {
+        "maxIndexMs": 5000,
+        "maxReadAmplification": 4
+      }
+    }
+  ]
+}

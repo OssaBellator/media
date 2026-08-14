@@ -1,4 +1,4 @@
-import { demuxIsoBmffSource } from '../../packages/core/src/isobmff-range.js';
+import { demuxIsoBmffAutoSource } from '../../packages/core/src/isobmff-auto-range.js';
 import { demuxWebmSource } from '../../packages/core/src/webm-range.js';
 import { sniffContainer } from '../../packages/core/src/media-kernel.js';
 import { readRange } from '../../packages/core/src/range-source.js';
@@ -10,5 +10,5 @@ export function createCutPlaybackEngine({blobResolver,sourceResolver,workerCount
   const clientFactory=forceInline||typeof Worker!=='function'?()=>new InlineKernelClient():()=>new WorkerKernelClient();
   const pool=new KernelWorkerPool({size:workerCount,clientFactory});
   const resolve=sourceResolver??((asset)=>createAssetRangeSource(asset,{blobResolver,pageSize:sourcePageSize,maxCacheBytes:sourceCacheBytes}));
-  return new CutPlaybackEngine({sourceResolver:resolve,pool,async demuxSource(source,asset){const head=await readRange(source,0,Math.min(32,source.size));const container=sniffContainer({mimeType:asset?.props?.mimeType,name:asset?.name,bytes:head});if(container==='mp4'||container==='mov')return demuxIsoBmffSource(source,{container,fragmentedFallbackMaxBytes});if(container==='webm')return demuxWebmSource(source);throw new Error(`Cut kernel playback does not support ${container}`);}});
+  return new CutPlaybackEngine({sourceResolver:resolve,pool,async demuxSource(source,asset){const head=await readRange(source,0,Math.min(32,source.size));const container=sniffContainer({mimeType:asset?.props?.mimeType,name:asset?.name,bytes:head});if(container==='mp4'||container==='mov')return demuxIsoBmffAutoSource(source,{container,fragmentedFallbackMaxBytes});if(container==='webm')return demuxWebmSource(source);throw new Error(`Cut kernel playback does not support ${container}`);}});
 }

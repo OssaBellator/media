@@ -1,35 +1,26 @@
 # Export and delivery
 
-Deliver continues to consume evaluated composition state rather than introducing a second edit model.
+Media supports in-memory classic MP4/WebM, progressive fMP4/WebM and resumable fMP4 render checkpoints.
 
-## Direct render
+## Resumable render
 
-Small outputs can still render frame-by-frame into WebCodecs and use classic in-memory MP4/WebM muxing. Progressive WebM/fMP4 byte sinks remain available for direct file streaming.
+Each render chunk owns global output timestamps and can persist picture+audio as an independent fMP4 media segment. Cancellation releases an active chunk without consuming a retry; completed segments survive reload/crash.
 
-## Resumable fMP4
+## Classic MP4 finalization
 
-0.9 wires the existing core render-job model into Studio delivery:
+0.10 can finalize a completed resumable render:
 
 ```text
-render manifest
-  -> fixed frame chunks
-  -> claim chunk
-  -> render video + audio concurrently
-  -> encode with global output-relative timestamps
-  -> create fMP4 init/media segment
-  -> persist segment artifact
-  -> complete checkpoint
-  -> resume remaining chunks after interruption
+persisted init + media segments
+  -> CompositeRangeSource
+  -> sparse fMP4 sample index
+  -> exact encoded sample reads
+  -> classic MP4 sample tables
+  -> fast-start moov + mdat
 ```
 
-Explicit cancellation releases the active chunk without consuming an attempt. Codec configuration is fingerprinted across segments; a changed decoder configuration fails rather than assembling incompatible fragments.
+The reference final writer currently rebuilds the final file in memory and enforces a payload cap. A seekable/streaming classic writer is a future optimization, not a missing sample/timestamp model.
 
-Assembly writes the initialization artifact followed by completed media segments in index order. It also returns a deterministic fragment index containing output time range, byte offset and byte length for each segment.
+## Audio
 
-## Streaming WebM
-
-The streaming writer uses an unknown-size Segment and forward Cluster writes. 0.9 appends Cues at close using the keyframe cluster byte positions collected while writing. This improves random access without requiring a seekable sink. A final SeekHead rewrite is still future work.
-
-## Remaining boundary
-
-Resumable delivery intentionally produces fragmented MP4. Rebuilding a fast-start classic MP4 would require a final sample-table rewrite/seekable sink pass. That is separate from checkpoint safety and is not claimed in 0.9.
+Offline compressed audio now prefers range-driven AAC/Opus decode into sparse PCM. Whole-source Web Audio decode is fallback.

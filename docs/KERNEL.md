@@ -2,51 +2,33 @@
 
 The kernel turns source bytes and evaluated creative intent into deterministic media work without coupling the Universal Creative Graph to browser APIs.
 
-## 0.9 production path
+## 0.10 production path
 
 ```text
 range source
-  -> sparse container index
-  -> seek/encoded window
-  -> Worker decode
-  -> bounded decoded cache
-  -> evaluated composition
-  -> GPU/Canvas preview
-
-range source
-  -> segmented derivative job
-  -> streaming decoder -> scaler -> encoder
-  -> bounded segment mux
-
-render manifest
-  -> resumable render chunks
-  -> concurrent chunk A/V encode
-  -> persisted fMP4 segments
-  -> deterministic assembly/index
+  -> classic MP4 / sparse fMP4 / sparse WebM / live WebM index
+  -> encoded windows
+  -> codec backend router
+       native | WebCodecs | WASM
+  -> decoded media
+  -> composition render graph
+  -> encode
+  -> resumable fragments
+  -> classic finalization / streaming delivery
 ```
 
-## Source contract
+### Fragmented MP4
 
-Media consumers depend on `size + read(offset,length)`. Classic MP4/MOV and common WebM are sparse-indexed; fragmented MP4 currently has a bounded full-read fallback until sparse `moof` indexing lands.
+The sparse fragment index reads top-level headers, `moov` and individual `moof` boxes. `tfhd/tfdt/trun` information is mapped back to absolute source byte offsets while `mdat` remains unread. The implementation targets common CMAF/default-base-is-moof layouts. Unsupported/ambiguous layouts may use the existing explicit bounded fallback.
 
-## Worker/codec contract
+### Live WebM
 
-Worker decoding continues to stream `VideoFrame`/`AudioData` via progress messages. Compact encoded windows remain transferable and decoder-independent. The 0.9 proxy path removes decoded-frame batch retention by forwarding decoder outputs directly into the encoder.
+`LiveWebmClusterIndexer` is stateful across source growth. Unknown-size Clusters remain open; partial element/block tails wait for more bytes; completed block ranges are emitted once. It is an indexer over an appendable range source, not a networking protocol.
 
-## Output
+### Codec backends
 
-Classic MP4/MOV, fMP4, WebM and WAV writers remain. Streaming WebM now writes terminal Cues. Resumable Studio delivery uses fMP4 because independently persisted media segments compose naturally with checkpointed render jobs.
+Codec work uses `CodecBackendRegistry`. Backends declare operations and priority, may probe support, and return the same kernel-facing results. `ERR_CODEC_UNSUPPORTED` is the only automatic fallback signal by default. Native/WASM implementations are injectable integration points; Media does not ship codec binaries in this repository.
 
-## GPU/color
+### HDR/GPU
 
-Evaluated source-backed layers can use a multi-layer WebGPU path. Unsupported plan features fall back to Canvas2D. SDR color conversion is explicit; HDR is not routed through the default rgba8 cache without an explicit tone-map policy.
-
-## Next kernel work
-
-1. sparse fragmented-MP4 `moof`/`mdat` range indexing;
-2. live/unknown-size WebM Cluster indexing;
-3. compressed-audio range decode instead of whole-Blob `AudioContext` decode;
-4. masks, transitions and non-normal blend modes in the GPU composition graph;
-5. float/HDR working-space render targets and explicit tone mapping;
-6. seekable classic-MP4 finalization after resumable fMP4 renders;
-7. larger real-media conformance/performance corpus and native/WASM codec fallbacks.
+The reference WebGPU graph composes in `rgba16float` and owns an explicit output tone-map pass. Browser source uploads remain capability-gated because structural HDR metadata does not by itself guarantee a scene-linear external-image conversion.

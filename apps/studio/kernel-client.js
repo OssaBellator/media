@@ -1,8 +1,8 @@
 import { createKernelCancel, createKernelTask } from '../../packages/core/src/index.js';
-import { createDefaultKernelRuntime } from './kernel-handlers.js';
+import { createProductionKernelRuntime } from './production-kernel-runtime.js';
 function abortError(message='Kernel client closed'){const error=new Error(message);error.name='AbortError';return error;}
 export class InlineKernelClient {
-  constructor({ runtime = createDefaultKernelRuntime() } = {}) { this.runtime = runtime; this.pending = new Map(); this.closed=false; }
+  constructor({ runtime = createProductionKernelRuntime() } = {}) { this.runtime = runtime; this.pending = new Map(); this.closed=false; }
   run(kind, payload, { id, priority = 0, onProgress } = {}) { if(this.closed)throw new Error('Kernel client is closed');const task = createKernelTask(kind, payload, { id, priority }); const promise = this.runtime.execute(task, { onProgress }).then((message) => { this.pending.delete(task.id); if (message.type === 'error') { const error = new Error(message.error.message); error.code = message.error.code; error.name=message.error.name??'Error'; throw error; } return message.result; }); this.pending.set(task.id, promise); return { id: task.id, promise, cancel: () => this.runtime.cancel(task.id) }; }
   close() { if(this.closed)return;this.closed=true;for (const id of this.pending.keys()) this.runtime.cancel(id); this.pending.clear(); }
 }

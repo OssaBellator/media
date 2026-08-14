@@ -1,8 +1,9 @@
-import { childrenOf, nodesByKind } from "./graph.js";
-import { primaryComposition } from "./project.js";
-import { clipEnd } from "./timeline.js";
-import { evaluateAnimatedTransform } from "./keyframes.js";
-import { evaluatedEffects } from "./effects.js";
+import { childrenOf, nodesByKind } from './graph.js';
+import { primaryComposition } from './project.js';
+import { clipEnd } from './timeline.js';
+import { evaluateAnimatedTransform } from './keyframes.js';
+import { evaluatedEffects } from './effects.js';
+import { compositingState } from './compositing.js';
 
 function enabled(node) { return node?.props?.enabled !== false; }
 
@@ -13,7 +14,7 @@ export function sourceTimeForClip(clip, timelineTime) {
 
 export function activeClipsAtTime(graph, time, { mediaKind } = {}) {
   const target = Number(time);
-  return nodesByKind(graph, "clip")
+  return nodesByKind(graph, 'clip')
     .filter(enabled)
     .filter((clip) => target >= Number(clip.props.start ?? 0) && target < clipEnd(clip))
     .filter((clip) => {
@@ -24,57 +25,62 @@ export function activeClipsAtTime(graph, time, { mediaKind } = {}) {
     .sort((a, b) => Number(graph.nodes[a.props.trackId]?.props.order ?? 0) - Number(graph.nodes[b.props.trackId]?.props.order ?? 0));
 }
 
+function compositing(node, time) {
+  const state = compositingState(node, time);
+  return { blendMode: state.blendMode, mask: state.mask, transition: state.transition };
+}
+
 export function evaluateComposition(graph, { compositionId, time = 0 } = {}) {
   const composition = compositionId ? graph.nodes[compositionId] : primaryComposition(graph);
-  if (!composition || composition.kind !== "composition") throw new Error("No composition found");
-  const canvasLayers = childrenOf(graph, composition.id, "layer")
-    .filter((layer) => layer.props.role !== "marker" && enabled(layer))
+  if (!composition || composition.kind !== 'composition') throw new Error('No composition found');
+  const canvasLayers = childrenOf(graph, composition.id, 'layer')
+    .filter((layer) => layer.props.role !== 'marker' && enabled(layer))
     .sort((a, b) => Number(a.props.order ?? 0) - Number(b.props.order ?? 0))
-    .map((layer) => layer.props.role === "shape" ? ({
-      kind: "shape",
+    .map((layer) => layer.props.role === 'shape' ? ({
+      kind: 'shape',
       nodeId: layer.id,
       shape: {
-        type: layer.props.shapeType ?? "rectangle", width: Number(layer.props.width ?? 500), height: Number(layer.props.height ?? 300),
-        fill: layer.props.fill ?? "#ffffff", stroke: layer.props.stroke ?? "transparent", strokeWidth: Number(layer.props.strokeWidth ?? 0), cornerRadius: Number(layer.props.cornerRadius ?? 0),
+        type: layer.props.shapeType ?? 'rectangle', width: Number(layer.props.width ?? 500), height: Number(layer.props.height ?? 300),
+        fill: layer.props.fill ?? '#ffffff', stroke: layer.props.stroke ?? 'transparent', strokeWidth: Number(layer.props.strokeWidth ?? 0), cornerRadius: Number(layer.props.cornerRadius ?? 0),
       },
       transform: evaluateAnimatedTransform(layer, time),
       effects: evaluatedEffects(graph, layer.id),
-      blendMode: layer.props.blendMode ?? "normal",
-    }) : layer.props.role === "text" ? ({
-      kind: "text",
+      ...compositing(layer, time),
+    }) : layer.props.role === 'text' ? ({
+      kind: 'text',
       nodeId: layer.id,
-      text: layer.props.text ?? "",
+      text: layer.props.text ?? '',
       style: {
-        fontFamily: layer.props.fontFamily ?? "sans-serif",
+        fontFamily: layer.props.fontFamily ?? 'sans-serif',
         fontSize: Number(layer.props.fontSize ?? 96),
         fontWeight: Number(layer.props.fontWeight ?? 700),
-        color: layer.props.color ?? "#ffffff",
-        align: layer.props.align ?? "center",
+        color: layer.props.color ?? '#ffffff',
+        align: layer.props.align ?? 'center',
         lineHeight: Number(layer.props.lineHeight ?? 1.1),
         letterSpacing: Number(layer.props.letterSpacing ?? 0),
       },
       transform: evaluateAnimatedTransform(layer, time),
       effects: evaluatedEffects(graph, layer.id),
-      blendMode: layer.props.blendMode ?? "normal",
+      ...compositing(layer, time),
     }) : ({
-      kind: "layer",
+      kind: 'layer',
       nodeId: layer.id,
       assetId: layer.props.assetId,
       transform: evaluateAnimatedTransform(layer, time),
       effects: evaluatedEffects(graph, layer.id),
-      blendMode: layer.props.blendMode ?? "normal",
+      ...compositing(layer, time),
     }));
-  const timelineVisuals = activeClipsAtTime(graph, time, { mediaKind: "visual" }).map((clip) => ({
-    kind: "clip",
+  const timelineVisuals = activeClipsAtTime(graph, time, { mediaKind: 'visual' }).map((clip) => ({
+    kind: 'clip',
     nodeId: clip.id,
     assetId: clip.props.assetId,
     sourceTime: sourceTimeForClip(clip, time),
     transform: evaluateAnimatedTransform(clip, time),
     effects: evaluatedEffects(graph, clip.id),
-    blendMode: clip.props.blendMode ?? "normal",
+    ...compositing(clip, time),
   }));
-  const audio = activeClipsAtTime(graph, time, { mediaKind: "audio" }).map((clip) => ({
-    kind: "audio",
+  const audio = activeClipsAtTime(graph, time, { mediaKind: 'audio' }).map((clip) => ({
+    kind: 'audio',
     nodeId: clip.id,
     assetId: clip.props.assetId,
     sourceTime: sourceTimeForClip(clip, time),
@@ -88,7 +94,7 @@ export function evaluateComposition(graph, { compositionId, time = 0 } = {}) {
     frame: Math.max(0, Math.round(Number(time) * Number(composition.props.fps ?? 30))),
     width: Number(composition.props.width),
     height: Number(composition.props.height),
-    background: composition.props.background ?? "#000000",
+    background: composition.props.background ?? '#000000',
     visual: [...canvasLayers, ...timelineVisuals],
     audio,
   };

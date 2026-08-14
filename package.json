@@ -1,6 +1,6 @@
 {
   "name": "media",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "private": true,
   "type": "module",
   "description": "A unified creative workspace for image, video, audio, animation and emerging media.",
@@ -10,6 +10,7 @@
     "test:watch": "node --test --watch packages/core/test/*.test.js apps/studio/test/*.test.js",
     "syntax:check": "node scripts/check-syntax.mjs",
     "build": "node scripts/build.mjs",
+    "conformance": "node scripts/conformance.mjs",
     "check": "npm run syntax:check && npm test && npm run build"
   },
   "engines": { "node": ">=22" }

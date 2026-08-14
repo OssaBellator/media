@@ -4,103 +4,61 @@ Media is an experimental unified creative workstation for image, video, audio, a
 
 The architectural thesis remains: **the creative project is the product, not a collection of application-specific files**. Canvas, Cut, Motion, Deliver and Agent are views over one Universal Creative Graph, reversible history and a shared media-kernel contract.
 
-## Current milestone — 0.9
+## Current milestone — 0.10
 
-0.9 turns the 0.8 browser reference pipeline into a substantially more bounded and resumable media engine. The focus is source IO, composition playback, streaming derivatives, checkpointed delivery and measurable fidelity/performance contracts.
+0.10 closes the production boundaries left after the bounded/resumable 0.9 engine.
 
-### Range-addressable source IO
+### Sparse and live container IO
 
-- generic async `size/read(offset,length)` source contract;
-- memory, Blob and HTTP Range adapters;
-- bounded paged source cache with in-flight deduplication and read statistics;
-- exact encoded-window compaction from source ranges;
-- sparse classic MP4/MOV indexing that reads `ftyp`/`moov` and top-level headers without materializing `mdat`;
-- sparse WebM indexing that reads Info/Tracks, Cluster headers and block/lacing prefixes while skipping frame payloads;
-- bounded explicit fallback for fragmented MP4 sources that cannot yet use a sparse `moof` index.
+- classic MP4/MOV and common WebM remain range-indexed;
+- fragmented MP4 now has a sparse `moov` + `moof` index for the common CMAF/default-base-is-moof path, leaving `mdat` unread until sample fetch;
+- ambiguous/unsupported fragment layouts retain the explicit bounded compatibility fallback;
+- `LiveWebmClusterIndexer` incrementally indexes append-only unknown-size Clusters, waits on partial trailing blocks and does not emit completed frames twice.
 
-### Composition-aware Cut playback
+### Range-driven compressed audio
 
-- Cut playback consumes `evaluateComposition()` instead of manually selecting one top clip;
-- all active source-backed clips/layers, transforms and supported effects share the same evaluation semantics as Deliver;
-- stale asynchronous decodes are discarded with latest-generation commit semantics;
-- preview plans are scaled to bounded dimensions/pixel counts;
-- video frames come from Worker/WebCodecs range-backed decode, while image/vector sources retain the bitmap fallback;
-- multi-layer normal-blend source plans can render through WebGPU; intrinsic text/shapes and unsupported plans fall back to Canvas2D.
+Deliver can derive source-time ranges from the audio mix plan, range-index AAC/Opus sources, compact only the required encoded chunks, decode through WebCodecs and copy `AudioData` directly into sparse `f32-planar` PCM blocks. The existing whole-Blob `AudioContext.decodeAudioData()` path is compatibility fallback rather than the preferred compressed-source render path.
 
-### Streaming derivatives
+### GPU render graph + HDR working space
 
-- resumable proxy jobs still checkpoint keyframe-aligned segments;
-- segment source bytes are fetched through range IO;
-- decoder output is resized and handed directly to the encoder instead of retained in a decoded-frame array;
-- encoded data is retained only for the bounded segment being muxed;
-- the previous full-source and decoded-frame batch paths remain compatibility fallbacks, not the preferred Studio path.
+- evaluated plans now carry blend/mask/transition state;
+- the WebGPU reference graph accepts source layers plus rasterized text/shapes;
+- alpha masks, crossfade/wipe/dip transitions and normal/multiply/screen/overlay/add/darken/lighten composition are represented explicitly;
+- intermediate composition uses `rgba16float` ping-pong targets;
+- PQ/HLG transfer helpers and explicit ACES/Reinhard/Hable/clip tone-map policies live in core;
+- HDR upload remains capability-gated: the engine does not claim an 8-bit browser upload is scene-linear HDR.
 
-### Resumable delivery
+### Resumable render → classic MP4
 
-- final MP4 rendering can checkpoint fixed frame chunks into derived storage;
-- each chunk renders picture and its audio concurrently and uses global output-relative timestamps;
-- completed fMP4 media segments survive interruption and are skipped on resume;
-- explicit cancellation releases the active chunk without consuming a retry;
-- assembly writes one init segment plus ordered media segments and produces a deterministic byte/time fragment index;
-- resumable caches can be cleared explicitly and browser quota pressure is surfaced.
+Completed fMP4 render checkpoints can be exposed as one virtual range source, re-indexed without first concatenating input parts, and finalized into a normal fast-start/classic MP4. The reference final rewrite is currently in-memory and guarded by a payload cap.
 
-### Streaming WebM
+### Codec portability
 
-The forward streaming writer now records keyframe cluster positions and appends a terminal Cues table. Cluster timing also honors non-default WebM `TimecodeScale` values instead of assuming one millisecond ticks.
+Kernel codec tasks route through a ranked backend registry. Browser WebCodecs is built in; desktop/native and WASM codecs can be injected through the same decode/encode contract. Only explicit `ERR_CODEC_UNSUPPORTED` results fall through automatically.
 
-### GPU and color fidelity
+### Conformance corpus
 
-- source-backed layers share crop/anchor/position/scale/rotation/opacity semantics with Canvas2D;
-- common scalar effects run per layer in WGSL and normal alpha blending composes multiple layers;
-- GPU and Canvas preview surfaces are separate so fallback remains valid after GPU initialization;
-- SDR primary/transfer conversion has a deterministic core contract;
-- PQ/HLG frames are rejected from the default 8-bit GPU cache unless an explicit tone-map policy exists, preventing silent HDR clamping;
-- GPU textures remain raw numeric storage; color policy is explicit at browser external-image boundaries.
+`npm run conformance` runs the bundled deterministic fixture and any optional real-media corpus present under `MEDIA_CORPUS_DIR`. The manifest covers camera, screen-recording, CMAF/live-stream and audio-only categories with metadata and performance budgets. Missing optional fixtures are skips, not passes.
 
-### Conformance/performance hooks
+## Deliberate 0.10 boundaries
 
-- source read amplification;
-- frame-cache hit ratio;
-- stale/dropped frame ratios;
-- chunk byte-range and decode-time validation;
-- render-chunk continuity validation;
-- configurable pass/fail budgets for focused regression/performance fixtures.
-
-## Deliberate 0.9 boundaries
-
-This is still a browser reference engine. Sparse fragmented-MP4 `moof` indexing remains outstanding; WebM unknown-size live Clusters are not yet a production live-stream demux path; audio source decode still relies on browser `AudioContext` for compressed local assets; GPU composition currently supports source-backed normal-blend layers rather than every text/vector/blend/mask operation; HDR metadata is preserved but there is no complete scene/display-referred tone-map pipeline; resumable final delivery targets fMP4 rather than rebuilding a fast-start classic MP4 without a final rewrite step.
+This is still a browser reference engine, not a claim of full shipping NLE conformance. Sparse fMP4 focuses on common fragment addressing; exotic base-data-offset/sample-group/encryption layouts need broader coverage. Live WebM is an append-aware indexer, not a network transport. GPU masks are currently alpha/non-feathered and some complex effects still fall back. Browser HDR source ingestion cannot be assumed scene-linear; explicit/native upload adapters remain the path to guaranteed HDR fidelity. Classic MP4 finalization currently rewrites in memory. Native/WASM codec implementations and large real-camera fixtures are integration points, not bundled binaries.
 
 ## Run locally
 
-Requires Node.js 22+.
-
-```bash
+```sh
 npm run dev
-```
-
-Open `http://127.0.0.1:4173`.
-
-There are no runtime package dependencies and no install step is required for the prototype.
-
-## Validate locally
-
-GitHub Actions is intentionally not used. The repository-owned gate is:
-
-```bash
-npm run check
-```
-
-Useful commands:
-
-```bash
-npm run syntax:check
 npm test
-npm run test:watch
+npm run syntax:check
 npm run build
+npm run check
+npm run conformance
 ```
+
+Set `MEDIA_CORPUS_DIR=/path/to/media-corpus` to run optional real-media fixtures.
 
 ## Engineering principle
 
-The UI is not the source of truth. Gestures, agent plans, Workers, range sources, derivative jobs, render checkpoints and future native frontends converge on the same graph/evaluation/kernel contracts.
+The UI is not the source of truth. Gestures, agents, Workers, range sources, codec backends, GPU passes, derivative jobs and resumable render checkpoints converge on the same graph/evaluation/kernel contracts.
 
-See `docs/ARCHITECTURE.md`, `docs/ENGINE.md`, `docs/KERNEL.md`, `docs/SOURCE_IO.md`, `docs/PLAYBACK.md`, `docs/EXPORT.md`, `docs/RENDER_JOBS.md`, `docs/GPU.md`, `docs/AUDIO.md`, `docs/CONFORMANCE.md`, `docs/PROJECT_FORMAT.md`, `docs/DECISIONS.md` and `docs/ROADMAP.md`.
+See `docs/ARCHITECTURE.md`, `docs/ENGINE.md`, `docs/KERNEL.md`, `docs/SOURCE_IO.md`, `docs/PLAYBACK.md`, `docs/EXPORT.md`, `docs/GPU.md`, `docs/AUDIO.md`, `docs/CODECS.md`, `docs/CONFORMANCE.md`, `docs/PROJECT_FORMAT.md`, `docs/DECISIONS.md` and `docs/ROADMAP.md`.
