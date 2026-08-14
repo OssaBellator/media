@@ -4,86 +4,42 @@ Media is an experimental unified creative workstation for image, video, audio, a
 
 The architectural thesis is simple: **the creative project is the product, not a collection of application-specific files**. Canvas, Cut, Motion, Deliver and Agent are views over the same Universal Creative Graph, shared source media and reversible edit history.
 
-## Current milestone — 0.4
+## Current milestone — 0.5
 
-The repository contains a dependency-light browser Studio and a framework-independent semantic/media engine.
+0.5 begins the production-media-kernel layer underneath the 0.4 creative engine.
 
-### Universal Creative Graph
+### Creative/editor layer
 
-- projects, assets, compositions, tracks, clips, layers, effects and outputs;
-- structural validation plus semantic project invariants;
-- atomic operation preflight with indexed diagnostics;
-- undo/redo above the mutation boundary;
-- `.media.json` file format v2 with formal source manifests and v0/v1 migration;
-- stable source identity independent of browser object URLs and machine paths.
+- Universal Creative Graph with semantic invariants and atomic operations;
+- Canvas with source, text and native vector layers;
+- Cut with multi-track move/trim/split/slip/duplicate/ripple/roll/blade editing;
+- Motion keyframes and nondestructive effects;
+- audio gain/pan/fades and browser preview mixing;
+- Deliver output nodes, deterministic render manifests and local still rendering;
+- local and HTTP planner-provider boundaries;
+- IndexedDB projects, media sources, derived artifacts and fingerprint relinking.
 
-### Canvas
+### Media kernel — 0.5
 
-- shared image/video/vector source layers;
-- first-class editable text layers;
-- first-class vector rectangle/ellipse layers;
-- position, scale, rotation, opacity, anchors and crop;
-- drag editing;
-- keyframe-compatible transforms;
-- nondestructive effect stacks;
-- Canvas2D still renderer with feature-detected WebGPU surface bootstrap.
+- versioned kernel task/result/error/progress protocol;
+- cancellable kernel handler runtime;
+- browser Worker client plus inline fallback;
+- container sniffing and normalized demux/track/chunk descriptors;
+- real RIFF/WAVE metadata parsing and PCM/float WAV decoding;
+- ISO-BMFF box, `ftyp` and movie-header parsing for MP4/MOV structural inspection;
+- EBML variable-integer/element parsing and WebM header inspection;
+- keyframe-aware seek indexes and directional decode-prefetch windows;
+- offline Float32 PCM resampling and gain/pan/fade mixing primitives;
+- proxy/thumbnail/waveform derivative planning with deterministic keys;
+- mux sample interleaving and keyframe-aligned segment planning;
+- resumable chunked render jobs with retry/interruption recovery;
+- production render DAG: source verification → derivatives → frame/audio render → encode → mux.
 
-### Cut
+### Deliberate boundary
 
-- multi-track visual/audio timeline;
-- frame-based transport and click-to-seek;
-- draggable clips with edit-point/marker snapping;
-- move, trim, split, slip, duplicate, roll edit, blade-all and ripple edits;
-- ripple insert at the playhead;
-- playback-rate changes preserving source range;
-- track mute/lock state with edit-time lock enforcement;
-- waveform display;
-- clip gain, pan, fades and browser AudioContext scheduling.
+0.5 does **not** claim full MP4/MOV/WebM demux or encoded video export. MP4/MOV inspection currently parses container boxes/brands/movie timing; WebM inspection parses EBML structure and DocType. Full sample tables/clusters, codec-specific descriptions, WebCodecs encoded-chunk feeding, production encoders and final container writers remain the next kernel work.
 
-### Motion
-
-- numeric keyframes on shared layer/clip properties;
-- linear, hold, ease-in, ease-out and ease-in-out interpolation;
-- keyframe lanes tied to the same transport as Cut;
-- animated transforms flow into composition evaluation rather than flattening output.
-
-### Deliver
-
-- output nodes live in the Creative Graph;
-- source-master, vertical, square, web, image-sequence and render-plan presets;
-- deterministic render manifests/signatures;
-- explicit source dependencies;
-- frame enumeration and audio-plan summaries;
-- current-frame PNG rendering through the same composition evaluation plan.
-
-### Media/runtime foundations
-
-- image/video/audio metadata probing;
-- sampled SHA-256 source fingerprints;
-- source-manifest matching and fingerprint relinking;
-- IndexedDB source persistence and derived-artifact store;
-- weighted LRU decoded-frame cache;
-- priority/deduplicating decode scheduler;
-- audio waveform extraction;
-- browser frame provider and video-frame fallback;
-- browser audio mixer;
-- WebGPU capability/compositor bootstrap with Canvas2D fallback.
-
-### Agent boundary
-
-The local planner is deliberately deterministic, but the provider interface is replaceable:
-
-```text
-intent
-  -> provider (local or HTTP)
-  -> sanitized project snapshot
-  -> validated operations
-  -> atomic preflight
-  -> semantic invariants
-  -> project graph
-```
-
-Remote providers do not receive local source URIs or waveform arrays and do not receive privileged mutation access.
+WAV is different: uncompressed PCM/IEEE-float WAV parsing and decode are implemented in the core kernel.
 
 ## Run locally
 
@@ -104,8 +60,6 @@ GitHub Actions is intentionally not used. The repository-owned gate is:
 ```bash
 npm run check
 ```
-
-It runs syntax checks, the Node test suite and the static build. The 0.4 milestone contains **69 local tests**.
 
 Useful commands:
 
@@ -131,16 +85,16 @@ In Cut or Motion:
 ## Repository layout
 
 ```text
-apps/studio/             Browser Studio and browser runtime adapters
+apps/studio/             Browser Studio and browser/runtime/kernel adapters
 apps/studio/test/        Runtime-module tests runnable in Node
-packages/core/src/       Creative Graph, editing, evaluation, audio/deliver/cache semantics
+packages/core/src/       Creative semantics plus media-kernel contracts/parsers/planners
 packages/core/test/      Core unit/integration tests
 scripts/                 Dependency-free dev/build/check tooling
-docs/                    Architecture, engine contracts, project format, decisions, roadmap
+docs/                    Architecture, engine/kernel contracts, project format, roadmap
 ```
 
 ## Engineering principle
 
-The UI is not the source of truth. Mouse gestures, keyboard shortcuts, agent plans, future plugins, collaboration and native frontends should converge on the same operation/evaluation contracts.
+The UI is not the source of truth. Mouse gestures, keyboard shortcuts, agent plans, future plugins, collaboration and native frontends should converge on the same operation/evaluation/kernel contracts.
 
-See `docs/ARCHITECTURE.md`, `docs/ENGINE.md`, `docs/PROJECT_FORMAT.md`, `docs/DECISIONS.md` and `docs/ROADMAP.md`.
+See `docs/ARCHITECTURE.md`, `docs/ENGINE.md`, `docs/KERNEL.md`, `docs/PROJECT_FORMAT.md`, `docs/DECISIONS.md` and `docs/ROADMAP.md`.

@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.5.0
+
+- Added a versioned media-kernel task protocol and cancellable handler runtime.
+- Added Worker and inline browser kernel clients with transferable-result support.
+- Added real RIFF/WAVE parsing and PCM/float WAV decoding.
+- Added ISO-BMFF top-level box, `ftyp` and `mvhd` parsing foundations for MP4/MOV inspection.
+- Added EBML variable-integer/element parsing and WebM DocType inspection.
+- Added encoded-chunk descriptors, demux plans, decoder configs and keyframe-safe seek/prefetch indexes.
+- Added mux track/sample plans, timestamp interleaving, keyframe-aligned segmentation and byte estimates.
+- Added offline Float32 PCM resampling, gain/pan/fade mixing and normalization primitives.
+- Added deterministic proxy/thumbnail/waveform derivative planning and cache keys.
+- Added resumable frame-chunk render jobs with retry, interruption recovery and artifact manifests.
+- Added a production pipeline DAG spanning source verification, derivatives, frame render, audio render, encode and mux stages.
+- Added 82 new local delta tests covering the kernel/core and browser adapters.
+
 ## 0.4.0
 
 - Added weighted decoded-frame cache and priority/deduplicating decode scheduler.

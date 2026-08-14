@@ -1,104 +1,61 @@
 # Media engine contracts
 
-## Execution layers
+Media separates creative semantics from media execution so the same project can be evaluated by browser preview, workers, a future native editor or a render farm.
 
-Media separates creative semantics from media execution so the same project can be evaluated by a browser preview, a future native editor or a render farm.
+## Level A — semantic engine
 
-### Level A — semantic engine (implemented)
+Implemented and DOM-free: graph invariants, atomic operations, timeline edits, transforms, text/shapes, keyframes/effects, composition evaluation, audio mix plans, delivery manifests, caches, source identity and planner/provider validation.
 
-Pure JavaScript, DOM-free and locally testable:
+## Level B — browser runtime
 
-- graph structure and semantic invariants;
-- atomic operation preflight;
-- timeline edits and snapping;
-- spatial transforms;
-- native text and vector shape layers;
-- keyframes and effects;
-- frame transport;
-- composition evaluation;
-- audio timing/mix plans;
-- delivery outputs and deterministic render manifests;
-- weighted caches and media task scheduling;
-- source manifests/relink scoring;
-- planner/provider validation.
+Implemented foundation: metadata/fingerprint probing, IndexedDB source + derived storage, frame caching/scheduling, HTML-media frame fallback, Canvas2D still composition, AudioContext preview mixing, WebGPU bootstrap, and in 0.5 a versioned Worker/inline media-kernel client.
 
-### Level B — browser runtime adapters (implemented foundation)
+## Level C — production media kernel
 
-- metadata probing;
-- sampled source fingerprinting;
-- waveform decode/downsampling;
-- IndexedDB source + derived-artifact persistence;
-- priority/deduplicated browser frame provider;
-- HTML media-element video-frame fallback;
-- Canvas2D render-plan compositor for images/video/text/shapes;
-- AudioContext multi-clip scheduling with gain/pan/fades;
-- WebGPU canvas/bootstrap capability path.
+0.5 begins this layer rather than treating it only as roadmap:
 
-### Level C — production media kernels (next)
+- versioned kernel task/progress/result/error/cancel protocol;
+- cancellable handler runtime;
+- normalized demux track/chunk/decoder descriptors;
+- real PCM/float WAV parsing and decode;
+- ISO-BMFF box/brand/movie-header parsing foundation;
+- EBML/WebM header parsing foundation;
+- keyframe seek/prefetch indexes;
+- deterministic proxy/thumbnail/waveform derivative plans;
+- Float32 PCM offline resampling/mixing primitives;
+- mux/interleave/segment plans;
+- resumable chunked render jobs;
+- production render DAG from source verification through mux.
 
-Still required for a professional high-throughput editor:
+Still required for professional encoded video export:
 
-1. real container demux for MP4/MOV/WebM and common audio formats;
-2. WebCodecs encoded-chunk decode queues;
-3. worker pools and cancellation-aware prefetch windows;
-4. proxy/thumbnail generation into the derived-media store;
-5. GPU texture caches and WebGPU shader effect kernels;
-6. sample-accurate offline audio render and automation curves;
-7. encoded video/audio mux and deterministic export;
-8. native/WASM codec/effect fallbacks.
+1. full MP4/MOV sample-table and fragmented-media demux;
+2. WebM Tracks/Cluster/Cues/block extraction;
+3. WebCodecs adapters consuming encoded chunks;
+4. real worker-pool decode/prefetch and proxy generation;
+5. GPU texture caches and shader effect kernels;
+6. offline audio automation/encoding;
+7. video/audio encoders and actual MP4/WebM container writers;
+8. native/WASM fallbacks.
 
 ## Evaluation contract
 
-The UI does not ask a decoder to “render a clip”. It asks the core to evaluate composition `C` at time `t`.
+The UI asks the core to evaluate composition `C` at time `t`; the result contains visual/audio draw state, source times, transforms, keyframes and effects. Runtime implementations fulfill that plan. Preview, still rendering and future offline export therefore share semantics.
 
-The evaluation plan contains:
+## Decode and seek contract
 
-- composition size/background/frame;
-- active source-backed Canvas layers;
-- native text and shape draw items;
-- active timeline clips and source times;
-- evaluated transforms/keyframes;
-- ordered effect stacks;
-- active audio items.
+Container parsers produce normalized track/chunk descriptors. Seek indexes map encoded chunks to keyframes and calculate directional decode windows. A decoder implementation can therefore change—from HTML media fallback to WebCodecs, WASM or native—without changing timeline semantics.
 
-A runtime fulfills the plan. This preserves semantic parity between interactive preview, still rendering and future offline export.
+## Audio contract
 
-## Decode scheduling and cache
+The Creative Graph owns gain/pan/fades and timeline/source timing. Core audio plans are translated either into AudioContext preview scheduling or deterministic Float32 PCM offline mixing. Optimized SIMD/WASM/native mixers can later replace the reference implementation behind the same contract.
 
-`WeightedLruCache` provides explicit memory budgets instead of unbounded browser object retention. `DecodeScheduler` provides:
+## Deliver and render jobs
 
-- bounded concurrency;
-- priority ordering;
-- in-flight deduplication by cache key;
-- cancellation support;
-- idle synchronization.
+Outputs remain graph nodes. Deterministic render manifests can now be partitioned into resumable frame chunks with retry and interruption recovery. `createProductionPipeline` expands that into an acyclic pipeline for source verification, optional derivatives, frame rendering, audio rendering, encoding and mux.
 
-The browser frame provider keys decoded frames by asset, quantized frame time, dimensions and media variant. Production decode should retain the same scheduling contract while moving work into workers/WebCodecs/native kernels.
+## Container honesty
 
-## Audio
+WebCodecs consumes encoded chunks; it does not demux containers. The 0.5 MP4/MOV and WebM parsers are deliberately described as structural foundations, not full demuxers. WAV PCM/float decode is genuinely implemented.
 
-The core owns audio semantics rather than AudioContext nodes. Clip state includes gain in dB, pan and fades; core helpers convert the timeline into source-time/sample-time plans. The browser mixer consumes those plans and schedules decoded buffers.
-
-This is a preview foundation, not yet a claim of sample-accurate browser export. Offline production rendering remains future work.
-
-## Deliver
-
-Outputs are graph nodes rather than transient export-dialog settings. A render manifest records:
-
-- target composition/output settings;
-- frame count/range;
-- source dependencies and hashes;
-- audio plan summary;
-- a deterministic signature over relevant edit state.
-
-The signature intentionally ignores timestamps while changing when render-affecting graph state changes. This is the basis for render caching, resumability and distributed execution.
-
-## Source identity
-
-Imported media gets a sampled SHA-256 fingerprint in addition to graph identity. The sampled fingerprint is optimized for fast relink/cache matching and is not presented as a full-file cryptographic digest.
-
-Project files store a source manifest. Browser storage indexes source records by hash/name so a reopened project can recover a local source even when asset IDs differ.
-
-## WebCodecs boundary
-
-WebCodecs consumes encoded chunks; it does not demux MP4/MOV/WebM containers. Media capability-detects WebCodecs but still uses browser media-element frame capture until a proper demux layer exists. That boundary is deliberate.
+See `docs/KERNEL.md` for the detailed kernel boundary.

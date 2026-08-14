@@ -16,9 +16,18 @@ export * from "./serialization.js";
 export * from "./timeline.js";
 export * from "./transforms.js";
 export * from "./transport.js";
-
 export * from "./sources.js";
-
 export * from "./text.js";
-
 export * from "./shapes.js";
+export * from "./ebml.js";
+export * from "./isobmff.js";
+export * from "./kernel-protocol.js";
+export * from "./kernel-runtime.js";
+export * from "./media-kernel.js";
+export * from "./mux.js";
+export * from "./pcm.js";
+export * from "./pipeline.js";
+export * from "./proxy.js";
+export * from "./render-jobs.js";
+export * from "./seek-index.js";
+export * from "./wav.js";

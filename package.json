@@ -1,6 +1,6 @@
 {
   "name": "media",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "private": true,
   "type": "module",
   "description": "A unified creative workspace for image, video, audio, animation and emerging media.",
