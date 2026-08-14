@@ -2,62 +2,73 @@
 
 Media is an experimental unified creative workstation for image, video, audio, animation and emerging media.
 
-The architectural thesis is simple: **the creative project is the product, not a collection of application-specific files**. Canvas, Cut, Motion, Deliver and Agent are views over the same Universal Creative Graph, reversible history and one media-kernel contract.
+The architectural thesis remains: **the creative project is the product, not a collection of application-specific files**. Canvas, Cut, Motion, Deliver and Agent are views over one Universal Creative Graph, reversible history and a shared media-kernel contract.
 
-## Current milestone — 0.8
+## Current milestone — 0.9
 
-0.8 integrates the production-media kernel back into editing and delivery. It deliberately works all ten boundaries left open after 0.7 rather than adding another workspace.
+0.9 turns the 0.8 browser reference pipeline into a substantially more bounded and resumable media engine. The focus is source IO, composition playback, streaming derivatives, checkpointed delivery and measurable fidelity/performance contracts.
 
-### Cut playback and streaming decode
+### Range-addressable source IO
 
-- Cut has a Worker-pool/WebCodecs playback service with HTML media retained as fallback only;
-- active video clips are resolved from the timeline clock and Creative Graph, including source-time/playback-rate mapping;
-- keyframe-safe decode windows are compacted to only the encoded bytes a Worker needs;
-- decoded `VideoFrame`s can be transferred in kernel progress events as they arrive rather than retained until task completion;
-- the editor keeps a bounded decoded-frame cache and invalidates it when a source fingerprint changes.
+- generic async `size/read(offset,length)` source contract;
+- memory, Blob and HTTP Range adapters;
+- bounded paged source cache with in-flight deduplication and read statistics;
+- exact encoded-window compaction from source ranges;
+- sparse classic MP4/MOV indexing that reads `ftyp`/`moov` and top-level headers without materializing `mdat`;
+- sparse WebM indexing that reads Info/Tracks, Cluster headers and block/lacing prefixes while skipping frame payloads;
+- bounded explicit fallback for fragmented MP4 sources that cannot yet use a sparse `moof` index.
 
-### Resumable derivatives
+### Composition-aware Cut playback
 
-- proxy jobs are split into keyframe-aligned segments;
-- segment state, attempts and artifacts are persisted through the existing IndexedDB derived store;
-- completed segments survive interruption and are skipped on resume;
-- each segment compacts its encoded video window before transcode;
-- browser proxy transcode remains bounded and emits VP9/AV1 + optional Opus WebM artifacts.
+- Cut playback consumes `evaluateComposition()` instead of manually selecting one top clip;
+- all active source-backed clips/layers, transforms and supported effects share the same evaluation semantics as Deliver;
+- stale asynchronous decodes are discarded with latest-generation commit semantics;
+- preview plans are scaled to bounded dimensions/pixel counts;
+- video frames come from Worker/WebCodecs range-backed decode, while image/vector sources retain the bitmap fallback;
+- multi-layer normal-blend source plans can render through WebGPU; intrinsic text/shapes and unsupported plans fall back to Canvas2D.
 
-### Deliver and streaming output
+### Streaming derivatives
 
-- Deliver can render the evaluated timeline frame-by-frame into WebCodecs encoders and mux MP4 or WebM;
-- an offline PCM mix can be encoded alongside picture;
-- explicit streaming export can write fMP4 or unknown-size WebM directly to a byte/File-System sink;
-- progressive streaming mode does not retain the complete encoded video stream before muxing;
-- the existing in-memory fast-start MP4/WebM paths remain available for smaller exports.
+- resumable proxy jobs still checkpoint keyframe-aligned segments;
+- segment source bytes are fetched through range IO;
+- decoder output is resized and handed directly to the encoder instead of retained in a decoded-frame array;
+- encoded data is retained only for the bounded segment being muxed;
+- the previous full-source and decoded-frame batch paths remain compatibility fallbacks, not the preferred Studio path.
 
-### MP4 presentation fidelity
+### Resumable delivery
 
-- classic and fragmented MP4 writers accept AVC, HEVC and AV1 video sample entries where a valid decoder description is available;
-- `colr/nclx`, `pasp`, `clli`, `mdcv` and track rotation matrices can be emitted;
-- the encoded-stream bridge preserves color, HDR, pixel-aspect and rotation metadata;
-- demux-side parsers surface those presentation properties again on imported video tracks.
+- final MP4 rendering can checkpoint fixed frame chunks into derived storage;
+- each chunk renders picture and its audio concurrently and uses global output-relative timestamps;
+- completed fMP4 media segments survive interruption and are skipped on resume;
+- explicit cancellation releases the active chunk without consuming a retry;
+- assembly writes one init segment plus ordered media segments and produces a deterministic byte/time fragment index;
+- resumable caches can be cleared explicitly and browser quota pressure is surfaced.
 
-### WebGPU effects
+### Streaming WebM
 
-- decoded frames can be copied into persistent, byte-bounded LRU `GPUTexture`s;
-- a WGSL compositor applies brightness, contrast, saturation, hue, opacity and an approximate blur in one shader pass;
-- Canvas2D remains the fallback;
-- Cut's kernel playback surface uses this compositor when WebGPU is available.
+The forward streaming writer now records keyframe cluster positions and appends a terminal Cues table. Cluster timing also honors non-default WebM `TimecodeScale` values instead of assuming one millisecond ticks.
 
-### Offline audio automation and loudness
+### GPU and color fidelity
 
-- sample-domain gain/pan automation curves with linear/hold/eased interpolation;
-- graph operation helpers for clip and output automation;
-- automated offline mix rendering with source-rate conversion, playback rate, fades and master gain;
-- BS.1770-style K-weighted integrated loudness with absolute/relative gating and surround channel weighting;
-- windowed-sinc 4× intersample peak estimation and target-LUFS/peak-constrained normalization;
-- Deliver exposes loudness analysis and can apply configured output loudness targets during offline render.
+- source-backed layers share crop/anchor/position/scale/rotation/opacity semantics with Canvas2D;
+- common scalar effects run per layer in WGSL and normal alpha blending composes multiple layers;
+- GPU and Canvas preview surfaces are separate so fallback remains valid after GPU initialization;
+- SDR primary/transfer conversion has a deterministic core contract;
+- PQ/HLG frames are rejected from the default 8-bit GPU cache unless an explicit tone-map policy exists, preventing silent HDR clamping;
+- GPU textures remain raw numeric storage; color policy is explicit at browser external-image boundaries.
 
-## Deliberate 0.8 boundaries
+### Conformance/performance hooks
 
-This is still a browser reference engine, not a claim of finished NLE playback/export. Worker Cut playback currently presents the top active video clip rather than GPU-compositing every overlapping timeline layer. Proxy transcode is resumable by bounded segment, but each segment still batch-decodes internally. Progressive export prepares audio before the video stream, WebM streaming omits a final Cue table, HDR metadata is structural rather than a complete color-management pipeline, and the loudness/true-peak implementation is an engineering reference rather than a certified broadcast meter.
+- source read amplification;
+- frame-cache hit ratio;
+- stale/dropped frame ratios;
+- chunk byte-range and decode-time validation;
+- render-chunk continuity validation;
+- configurable pass/fail budgets for focused regression/performance fixtures.
+
+## Deliberate 0.9 boundaries
+
+This is still a browser reference engine. Sparse fragmented-MP4 `moof` indexing remains outstanding; WebM unknown-size live Clusters are not yet a production live-stream demux path; audio source decode still relies on browser `AudioContext` for compressed local assets; GPU composition currently supports source-backed normal-blend layers rather than every text/vector/blend/mask operation; HDR metadata is preserved but there is no complete scene/display-referred tone-map pipeline; resumable final delivery targets fMP4 rather than rebuilding a fast-start classic MP4 without a final rewrite step.
 
 ## Run locally
 
@@ -88,31 +99,8 @@ npm run test:watch
 npm run build
 ```
 
-## Keyboard controls
-
-In Cut or Motion:
-
-- `Space` — play/pause
-- `Left` / `Right` — previous/next frame
-- `M` — marker at playhead
-- `S` — split selected clip at playhead
-- `B` — blade unlocked clips at playhead
-- `Cmd/Ctrl+Z` — undo
-- `Cmd/Ctrl+Shift+Z` — redo
-
-## Repository layout
-
-```text
-apps/studio/             Browser Studio plus playback/GPU/codec/delivery runtimes
-apps/studio/test/        Runtime-module tests runnable in Node with injected fakes
-packages/core/src/       Creative semantics + container/audio/streaming primitives
-packages/core/test/      Core unit/integration tests
-scripts/                 Dependency-free dev/build/check tooling
-docs/                    Architecture, kernel, export, playback, GPU and audio contracts
-```
-
 ## Engineering principle
 
-The UI is not the source of truth. Mouse gestures, keyboard shortcuts, agent plans, Workers, derived-media jobs, render sinks and future native frontends should converge on the same operation/evaluation/kernel contracts.
+The UI is not the source of truth. Gestures, agent plans, Workers, range sources, derivative jobs, render checkpoints and future native frontends converge on the same graph/evaluation/kernel contracts.
 
-See `docs/ARCHITECTURE.md`, `docs/ENGINE.md`, `docs/KERNEL.md`, `docs/EXPORT.md`, `docs/PLAYBACK.md`, `docs/GPU.md`, `docs/AUDIO.md`, `docs/PROJECT_FORMAT.md`, `docs/DECISIONS.md` and `docs/ROADMAP.md`.
+See `docs/ARCHITECTURE.md`, `docs/ENGINE.md`, `docs/KERNEL.md`, `docs/SOURCE_IO.md`, `docs/PLAYBACK.md`, `docs/EXPORT.md`, `docs/RENDER_JOBS.md`, `docs/GPU.md`, `docs/AUDIO.md`, `docs/CONFORMANCE.md`, `docs/PROJECT_FORMAT.md`, `docs/DECISIONS.md` and `docs/ROADMAP.md`.

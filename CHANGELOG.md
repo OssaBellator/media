@@ -1,38 +1,31 @@
 # Changelog
 
+## 0.9.0
+
+- Added a generic range-addressable media source contract with memory, Blob, HTTP Range and bounded paged-cache implementations.
+- Added range-backed encoded-window compaction with adjacent-read coalescing and strict source bounds.
+- Added sparse classic MP4/MOV top-level/moov indexing and exact absolute sample reads without materializing `mdat`.
+- Added sparse WebM Info/Tracks/Cluster indexing that skips frame payloads and reads block/lacing prefixes only.
+- Refactored Cut playback to consume range sources while preserving the legacy Blob resolver API.
+- Fixed duplicate play/prefetch GOP work by deduplicating the actual encoded decode window.
+- Added evaluated multi-layer composition playback with bounded preview scaling and latest-generation stale-frame suppression.
+- Added a WebGPU multi-layer normal-blend compositor matching Canvas crop/anchor/transform/effect semantics, with separate GPU/Canvas surfaces and deterministic fallback.
+- Added explicit SDR color-conversion primitives and an HDR GPU policy that refuses PQ/HLG in the default 8-bit cache without tone mapping.
+- Added streaming decoder → scaler → encoder proxy handoff so resumable proxy segments no longer retain decoded-frame batches.
+- Added resumable final fMP4 render jobs with concurrent per-chunk A/V encoding, global timestamps, retry-safe cancellation, persisted segments and deterministic assembly indexes.
+- Added shared IndexedDB connection lifecycle, derived-prefix cleanup helpers and storage quota reporting.
+- Added terminal WebM Cues to the streaming writer and corrected cluster timing for arbitrary `TimecodeScale`.
+- Added conformance/performance counters and budgets for source-read amplification, cache hits, stale/dropped frames, media byte ranges and render chunk continuity.
+- Added 0.9 focused regressions plus targeted 0.8 compatibility coverage for playback, GPU cache and derivative runner behavior.
+
 ## 0.8.0
 
-- Integrated a Worker-pool/WebCodecs Cut playback service with timeline-driven active-clip/source-time resolution and HTML-media fallback.
-- Added compact encoded decode windows so Workers receive only the byte ranges needed for a seek/prefetch operation.
-- Added streamed `VideoFrame`/`AudioData` kernel progress delivery and transferable progress messages instead of retaining whole decode batches.
-- Added fingerprint-aware decoded-frame cache invalidation and a bounded playback frame cache.
-- Added keyframe-aligned derivative segment jobs with claims, retries, recovery, progress and IndexedDB-backed resumability.
-- Added compact per-segment proxy source windows and Studio build/resume proxy integration.
-- Added full Deliver timeline render → WebCodecs encode → MP4/WebM mux orchestration with optional offline audio.
-- Added byte-sink abstractions plus progressive fragmented-MP4 and unknown-size WebM streaming writers.
-- Added progressive video export that can release encoded video chunks after sink delivery instead of retaining the complete stream.
-- Added HEVC (`hvc1`/`hev1`) and AV1 (`av01`) MP4 sample-entry/configuration output.
-- Added MP4 `colr/nclx`, `pasp`, `clli`, `mdcv` and rotation-matrix writing plus demux-side metadata extraction.
-- Added preservation of color/HDR/aspect/rotation metadata through the encoded-stream → mux bridge.
-- Added a byte-bounded LRU WebGPU frame texture cache and a WGSL effect pipeline for brightness, contrast, saturation, hue, blur and opacity, with Canvas2D fallback.
-- Added sample-domain audio automation curves and graph operation helpers for clip/output gain/pan automation.
-- Added automated offline mix rendering, fixed source-in conversion across differing source/output sample rates, and PCM block generation.
-- Added BS.1770-style K-weighted/gated integrated loudness, surround channel weighting, windowed-sinc intersample peak estimation and loudness/peak-constrained normalization.
-- Added Studio Deliver actions for MP4/WebM render, progressive file streaming where File System Access is available, loudness analysis and resumable proxy generation.
-- Added 43 focused local 0.8 regression tests across playback, streaming codecs/sinks, derivatives, MP4 metadata, GPU effects and offline audio.
+- Integrated Worker/WebCodecs Cut playback, streamed decode results, resumable proxy segments and full Deliver timeline render.
+- Added progressive fMP4/WebM sinks, HEVC/AV1 MP4 entries, color/HDR/aspect/rotation metadata, GPU texture/effect kernels and offline loudness automation.
 
 ## 0.7.0
 
-- Added an in-memory classic fast-start MP4/MOV writer for AVC + AAC.
-- Added fragmented-MP4 init/media writers using `mvex/trex`, `tfhd`, `tfdt` and `trun`.
-- Added `edts/elst` v0/v1 parsing and simple 1× edit-list application during MP4 demux.
-- Added leading-empty-edit emission when classic mux tracks begin after movie time zero.
-- Added version-1 `mdhd` output for long-form tracks that exceed 32-bit microsecond duration.
-- Added direct WebCodecs encoder-result → mux-plan bridging with decoder-description preservation.
-- Added executable thumbnail generation through keyframe-safe WebCodecs decode + canvas encoding.
-- Added executable WebM proxy transcoding with resize, VP9/AV1 video, optional Opus audio and explicit batch-memory caps.
-- Added real kernel `thumbnail`, `proxy`, MP4/MOV `mux` and fMP4 mux dispatch paths.
-- Fixed seek-window overlap so a chunk ending exactly at a keyframe boundary is not included before that keyframe.
+- Added classic/fMP4 AVC/AAC writing, MP4 edit-list handling, WebCodecs encoder→mux bridging and executable thumbnail/proxy derivatives.
 
 ## 0.6.0
 
@@ -40,7 +33,7 @@
 
 ## 0.5.0
 
-- Added the versioned media-kernel protocol/runtime, WAV decode, structural container parsing, offline PCM primitives, derivative planning, resumable render jobs and the production pipeline DAG.
+- Added the versioned media-kernel protocol/runtime, structural container parsing, offline PCM primitives, derivative planning, resumable render jobs and the production pipeline DAG.
 
 ## 0.4.0
 

@@ -1,0 +1,5 @@
+import test from 'node:test';import assert from 'node:assert/strict';
+
+test('storage reuses one IndexedDB connection and releases it explicitly',async()=>{let opens=0,closes=0;const db={close(){closes++;},onversionchange:null,objectStoreNames:{contains(){return true;}}};globalThis.indexedDB={open(){opens++;const request={result:db,error:null};queueMicrotask(()=>request.onsuccess?.());return request;}};const module=await import(`../storage.js?shared=${Date.now()}`);const first=await module.openMediaDatabase(),second=await module.openMediaDatabase();assert.equal(first,db);assert.equal(second,db);assert.equal(opens,1);await module.closeMediaDatabase();assert.equal(closes,1);});
+
+test('storage quota estimate reports remaining bytes and ratio',async()=>{Object.defineProperty(globalThis.navigator,'storage',{value:{async estimate(){return{usage:75,quota:100};}},configurable:true});const module=await import(`../storage.js?quota=${Date.now()}`);assert.deepEqual(await module.estimateStorageQuota(),{usage:75,quota:100,available:25,ratio:.75});});

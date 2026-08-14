@@ -1,27 +1,35 @@
-# Cut playback runtime
+# Cut playback
 
-## Contract
+## 0.9 path
 
-Cut playback is a consumer of timeline semantics, not a second timeline implementation. The browser runtime reads the current transport time, finds the top active unmuted visual clip, converts timeline time to source time, and requests that frame from `CutPlaybackEngine`.
+```text
+transport time
+  -> evaluateComposition(graph, time)
+  -> bounded preview plan
+  -> resolve every source-backed visual item
+       -> range source
+       -> sparse demux index
+       -> keyframe-safe decode window
+       -> compact encoded bytes
+       -> Worker/WebCodecs decode
+       -> bounded decoded-frame cache
+  -> WebGPU multi-layer composition when fully supported
+     OR Canvas2D composition fallback
+  -> latest-generation commit
+```
 
-## Decode path
+Cut no longer duplicates timeline semantics by manually picking one active clip. Transforms, effects, z-order and clip source-time mapping come from the same evaluated plan used by Deliver.
 
-1. load the persisted source Blob by asset id;
-2. demux MP4/MOV or WebM to normalized tracks/chunks;
-3. create the decoder-independent seek index;
-4. find a preceding keyframe and directional decode window;
-5. compact only those encoded byte ranges into a Worker-transferable buffer;
-6. run `decode-video` with `stream:true`;
-7. receive each `VideoFrame` in a transferable kernel progress message;
-8. cache a bounded number of decoded frames;
-9. present through WebGPU or Canvas2D.
+## Latest-wins presentation
 
-The frame cache closes evicted frames. A source hash/identity change invalidates the source's demux and decoded state.
+Frame resolution is asynchronous. Every present request receives a generation number. The renderer resolves sources into a scratch/queued representation first; if a seek/newer frame supersedes the request, no old frame is committed to the visible surface.
 
-## Prefetch
+## GPU eligibility
 
-Foreground seeks use high priority. A smaller-priority forward/backward request follows the playhead. The existing Worker pool deduplicates matching keyed windows and cancellation clears work when assets change or the playback service closes.
+The initial multi-layer GPU path covers source-backed layers/clips with normal blending and brightness/contrast/saturation/hue/blur/opacity. Text, native shapes, unsupported effects or non-normal blending fall back to Canvas2D for semantic parity.
 
-## Current integration boundary
+GPU and Canvas use separate canvases. A WebGPU context initialization failure cannot make the Canvas2D fallback unavailable.
 
-The original HTML media element remains as a compatibility fallback. The 0.8 runtime follows the Studio transport as exposed by the current UI and renders the **top active video clip**. It does not yet ask the full composition evaluator for every overlapping visual item, so multi-layer Cut playback still needs a composition-aware GPU scheduler.
+## Compatibility
+
+`CutPlaybackEngine` still accepts the 0.8 `blobResolver` constructor option. It wraps returned Blobs in a range source, so existing callers keep working while the Studio factory uses the range-source API directly.
