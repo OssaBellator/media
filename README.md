@@ -2,45 +2,62 @@
 
 Media is an experimental unified creative workstation for image, video, audio, animation and emerging media.
 
-The architectural thesis is simple: **the creative project is the product, not a collection of application-specific files**. Canvas, Cut, Motion, Deliver and Agent are views over the same Universal Creative Graph, shared source media, reversible history and one media-kernel contract.
+The architectural thesis is simple: **the creative project is the product, not a collection of application-specific files**. Canvas, Cut, Motion, Deliver and Agent are views over the same Universal Creative Graph, reversible history and one media-kernel contract.
 
-## Current milestone — 0.7
+## Current milestone — 0.8
 
-0.7 closes the first practical browser export/derivative loops on top of the 0.6 demux + WebCodecs kernel.
+0.8 integrates the production-media kernel back into editing and delivery. It deliberately works all ten boundaries left open after 0.7 rather than adding another workspace.
 
-### Editor foundation
+### Cut playback and streaming decode
 
-The existing creative layer remains intact: Universal Creative Graph, Canvas, multi-track Cut, Motion keyframes/effects, audio editing, Deliver manifests/stills, Agent provider boundaries, IndexedDB projects/media/derived artifacts and resumable render jobs.
+- Cut has a Worker-pool/WebCodecs playback service with HTML media retained as fallback only;
+- active video clips are resolved from the timeline clock and Creative Graph, including source-time/playback-rate mapping;
+- keyframe-safe decode windows are compacted to only the encoded bytes a Worker needs;
+- decoded `VideoFrame`s can be transferred in kernel progress events as they arrive rather than retained until task completion;
+- the editor keeps a bounded decoded-frame cache and invalidates it when a source fingerprint changes.
 
-### Container and export paths
+### Resumable derivatives
 
-- classic fast-start MP4/MOV writer for AVC (`avc1`/`avc3`) + AAC (`mp4a.40.*`);
-- `stsd`, `stts`, signed/unsigned `ctts`, `stsc`, `stsz`, `stco`/`co64`, `stss`, `avcC` and `esds` output;
-- leading non-zero classic track time is represented with `edts/elst` rather than silently discarded;
-- long media durations promote `mdhd` to version 1 when 32-bit microsecond duration is insufficient;
-- fragmented MP4 init output with `mvex/trex` plus `moof/traf/tfhd/tfdt/trun` media segments;
-- existing WebM VP8/VP9/AV1 + Opus/Vorbis writer and WAV PCM/float writer;
-- WebCodecs encoder results can be converted directly into mux plans while preserving decoder descriptions.
+- proxy jobs are split into keyframe-aligned segments;
+- segment state, attempts and artifacts are persisted through the existing IndexedDB derived store;
+- completed segments survive interruption and are skipped on resume;
+- each segment compacts its encoded video window before transcode;
+- browser proxy transcode remains bounded and emits VP9/AV1 + optional Opus WebM artifacts.
 
-### Import timing
+### Deliver and streaming output
 
-- MP4 `elst` v0/v1 parsing;
-- leading empty edits and 1× trim/remap semantics;
-- simple edit lists are applied to demuxed chunk timing;
-- unsupported rate-changing edits remain visible in demux metadata instead of making the source unreadable.
+- Deliver can render the evaluated timeline frame-by-frame into WebCodecs encoders and mux MP4 or WebM;
+- an offline PCM mix can be encoded alongside picture;
+- explicit streaming export can write fMP4 or unknown-size WebM directly to a byte/File-System sink;
+- progressive streaming mode does not retain the complete encoded video stream before muxing;
+- the existing in-memory fast-start MP4/WebM paths remain available for smaller exports.
 
-### Derived media
+### MP4 presentation fidelity
 
-- keyframe-safe thumbnail decode from normalized chunk indexes;
-- OffscreenCanvas/Canvas2D thumbnail encoding to WebP/PNG/etc.;
-- executable WebM proxy transcode: demuxed chunks → WebCodecs decode → resize → WebCodecs encode → Media WebM mux;
-- optional audio transcode to Opus for editorial proxies;
-- explicit decoded-frame caps so large sources must be segmented instead of retaining unbounded `VideoFrame`/`AudioData` batches;
-- kernel `thumbnail` and `proxy` tasks now have real runtime implementations.
+- classic and fragmented MP4 writers accept AVC, HEVC and AV1 video sample entries where a valid decoder description is available;
+- `colr/nclx`, `pasp`, `clli`, `mdcv` and track rotation matrices can be emitted;
+- the encoded-stream bridge preserves color, HDR, pixel-aspect and rotation metadata;
+- demux-side parsers surface those presentation properties again on imported video tracks.
 
-### Scheduling correctness
+### WebGPU effects
 
-A decode-window boundary bug was fixed: a chunk whose end time equals the selected keyframe is no longer included before that keyframe. This prevents unnecessary pre-keyframe delta data from entering decode windows.
+- decoded frames can be copied into persistent, byte-bounded LRU `GPUTexture`s;
+- a WGSL compositor applies brightness, contrast, saturation, hue, opacity and an approximate blur in one shader pass;
+- Canvas2D remains the fallback;
+- Cut's kernel playback surface uses this compositor when WebGPU is available.
+
+### Offline audio automation and loudness
+
+- sample-domain gain/pan automation curves with linear/hold/eased interpolation;
+- graph operation helpers for clip and output automation;
+- automated offline mix rendering with source-rate conversion, playback rate, fades and master gain;
+- BS.1770-style K-weighted integrated loudness with absolute/relative gating and surround channel weighting;
+- windowed-sinc 4× intersample peak estimation and target-LUFS/peak-constrained normalization;
+- Deliver exposes loudness analysis and can apply configured output loudness targets during offline render.
+
+## Deliberate 0.8 boundaries
+
+This is still a browser reference engine, not a claim of finished NLE playback/export. Worker Cut playback currently presents the top active video clip rather than GPU-compositing every overlapping timeline layer. Proxy transcode is resumable by bounded segment, but each segment still batch-decodes internally. Progressive export prepares audio before the video stream, WebM streaming omits a final Cue table, HDR metadata is structural rather than a complete color-management pipeline, and the loudness/true-peak implementation is an engineering reference rather than a certified broadcast meter.
 
 ## Run locally
 
@@ -52,7 +69,7 @@ npm run dev
 
 Open `http://127.0.0.1:4173`.
 
-There are currently no runtime package dependencies and no install step is required for the prototype.
+There are no runtime package dependencies and no install step is required for the prototype.
 
 ## Validate locally
 
@@ -86,16 +103,16 @@ In Cut or Motion:
 ## Repository layout
 
 ```text
-apps/studio/             Browser Studio and browser/runtime/kernel adapters
-apps/studio/test/        Runtime-module tests runnable in Node
-packages/core/src/       Creative semantics + container/kernel/export primitives
+apps/studio/             Browser Studio plus playback/GPU/codec/delivery runtimes
+apps/studio/test/        Runtime-module tests runnable in Node with injected fakes
+packages/core/src/       Creative semantics + container/audio/streaming primitives
 packages/core/test/      Core unit/integration tests
 scripts/                 Dependency-free dev/build/check tooling
-docs/                    Architecture, engine/kernel/export contracts and roadmap
+docs/                    Architecture, kernel, export, playback, GPU and audio contracts
 ```
 
 ## Engineering principle
 
-The UI is not the source of truth. Mouse gestures, keyboard shortcuts, agent plans, collaboration, derived-media workers and future native frontends should converge on the same operation/evaluation/kernel contracts.
+The UI is not the source of truth. Mouse gestures, keyboard shortcuts, agent plans, Workers, derived-media jobs, render sinks and future native frontends should converge on the same operation/evaluation/kernel contracts.
 
-See `docs/ARCHITECTURE.md`, `docs/ENGINE.md`, `docs/KERNEL.md`, `docs/EXPORT.md`, `docs/PROJECT_FORMAT.md`, `docs/DECISIONS.md` and `docs/ROADMAP.md`.
+See `docs/ARCHITECTURE.md`, `docs/ENGINE.md`, `docs/KERNEL.md`, `docs/EXPORT.md`, `docs/PLAYBACK.md`, `docs/GPU.md`, `docs/AUDIO.md`, `docs/PROJECT_FORMAT.md`, `docs/DECISIONS.md` and `docs/ROADMAP.md`.

@@ -1,31 +1,11 @@
-export async function createCompositor(canvas) {
+import { GpuFrameTextureCache } from './gpu-frame-cache.js';
+import { GpuEffectPipeline } from './gpu-effects.js';
+export async function createCompositor(canvas,{maxCacheBytes=256*1024*1024}={}) {
   if (globalThis.navigator?.gpu) {
     try {
-      const adapter = await navigator.gpu.requestAdapter();
-      const device = await adapter?.requestDevice();
-      const context = canvas.getContext("webgpu");
-      if (device && context) {
-        const format = navigator.gpu.getPreferredCanvasFormat();
-        context.configure({ device, format, alphaMode: "premultiplied" });
-        return {
-          backend: "webgpu",
-          clear([r = 0, g = 0, b = 0, a = 1] = []) {
-            const encoder = device.createCommandEncoder();
-            const pass = encoder.beginRenderPass({
-              colorAttachments: [{ view: context.getCurrentTexture().createView(), clearValue: { r, g, b, a }, loadOp: "clear", storeOp: "store" }],
-            });
-            pass.end();
-            device.queue.submit([encoder.finish()]);
-          },
-          device,
-        };
-      }
+      const adapter = await navigator.gpu.requestAdapter(); const device = await adapter?.requestDevice(); const context = canvas.getContext('webgpu');
+      if (device && context) { const format=navigator.gpu.getPreferredCanvasFormat();context.configure({device,format,alphaMode:'premultiplied'});const frameCache=new GpuFrameTextureCache(device,{maxBytes:maxCacheBytes});const effects=new GpuEffectPipeline(device,{format});return{backend:'webgpu',device,frameCache,effects,clear([r=0,g=0,b=0,a=1]=[]){const encoder=device.createCommandEncoder();const pass=encoder.beginRenderPass({colorAttachments:[{view:context.getCurrentTexture().createView(),clearValue:{r,g,b,a},loadOp:'clear',storeOp:'store'}]});pass.end();device.queue.submit([encoder.finish()]);},drawFrame(frame,params={}){const key=params.cacheKey??`frame:${frame.timestamp??performance.now()}`;const texture=frameCache.textureForFrame(key,frame);const encoder=device.createCommandEncoder();effects.render(encoder,texture,context.getCurrentTexture().createView(),{width:canvas.width,height:canvas.height,...params});device.queue.submit([encoder.finish()]);return{backend:'webgpu',cache:frameCache.stats()};},destroy(){frameCache.clear();effects.destroy();}}; }
     } catch {}
   }
-  const context = canvas.getContext("2d");
-  return {
-    backend: "canvas2d",
-    clear([r = 0, g = 0, b = 0, a = 1] = []) { context.clearRect(0, 0, canvas.width, canvas.height); context.fillStyle = `rgba(${Math.round(r * 255)},${Math.round(g * 255)},${Math.round(b * 255)},${a})`; context.fillRect(0, 0, canvas.width, canvas.height); },
-    context,
-  };
+  const context=canvas.getContext('2d');return{backend:'canvas2d',clear([r=0,g=0,b=0,a=1]=[]){context.clearRect(0,0,canvas.width,canvas.height);context.fillStyle=`rgba(${Math.round(r*255)},${Math.round(g*255)},${Math.round(b*255)},${a})`;context.fillRect(0,0,canvas.width,canvas.height);},drawFrame(frame,params={}){context.save();context.globalAlpha=Number(params.opacity??1);context.filter=`brightness(${Number(params.brightness??1)}) contrast(${Number(params.contrast??1)}) saturate(${Number(params.saturation??1)}) hue-rotate(${Number(params.hueDegrees??0)}deg) blur(${Math.max(0,Number(params.blur??0))}px)`;context.drawImage(frame,0,0,canvas.width,canvas.height);context.restore();return{backend:'canvas2d'};},context};
 }

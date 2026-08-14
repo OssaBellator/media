@@ -1,93 +1,50 @@
 # Roadmap
 
-## Milestone 0.1 — graph thesis ✅
+## 0.1–0.4 — creative engine ✅
 
-- Universal Creative Graph
-- operation boundary
-- undo/redo
-- Canvas/Cut/Agent shell
-- local project export
+Universal Creative Graph, operation/history boundary, Canvas/Cut/Motion/Agent/Deliver views, persistence, transforms/keyframes/effects, audio clip semantics, render manifests, text/shapes and project/source identity.
 
-## Milestone 0.2 — durable editing ✅
+## 0.5–0.7 — production media kernel ✅
 
-- IndexedDB graph/source persistence
-- project-file open/migration
-- metadata probing
-- move/trim/split/ripple delete
-- transactional validation
-- relinkable source identity foundation
+Kernel protocol/runtime, WAV, MP4/WebM demux, keyframe seek indexes, Worker/WebCodecs adapters, offline PCM, derivative/render jobs, WebM writer, classic/fMP4 writer, edit lists, thumbnails and bounded proxy transcode.
 
-## Milestone 0.3 — creative engine foundation ✅
+## 0.8 — integrated playback/render processing ✅ reference implementation
 
-- semantic project invariants
-- atomic preflight diagnostics
-- snapping, ripple insert, slip and playback-rate semantics
-- multi-track mute/lock state
-- frame transport
-- Canvas transforms
-- Motion keyframes/easing
-- nondestructive effects
-- composition evaluation
-- waveforms/fingerprints/relink
-- provider registry
-- WebGPU bootstrap
+- Worker-pool/WebCodecs Cut playback
+- streamed decoded-frame progress + bounded frame cache
+- compact encoded seek windows
+- segmented/resumable IndexedDB proxy jobs
+- full timeline WebCodecs Deliver render
+- progressive fMP4/WebM byte sinks
+- HEVC/AV1 MP4 sample entries
+- color/HDR/rotation/pixel-aspect metadata preservation
+- WebGPU frame texture cache
+- WGSL common-effect pass
+- offline audio automation + loudness/peak normalization
 
-## Milestone 0.4 — render/audio/deliver foundation ✅
+## 0.9 — make the reference paths production-grade
 
-- weighted decoded-media LRU cache
-- priority/deduplicating decode scheduler
-- browser frame provider
-- formal source manifest + project-file v2 migration
-- hash-indexed local relinking
-- derived-artifact persistence store
-- audio gain/pan/fade semantics
-- sample/time audio mix planning
-- AudioContext multi-clip preview mixer
-- duplicate, roll edit, blade-all and ripple trim
-- first-class text layers
-- first-class vector rectangle/ellipse layers
-- Deliver output graph nodes/presets
-- deterministic render manifests/signatures
-- Canvas2D still rendering from composition plans
-- sanitized HTTP planner-provider adapter
+- range-addressable source IO and incremental demux
+- composition-aware multi-layer GPU playback
+- streaming decoder → proxy encoder inside segments
+- simultaneous progressive A/V render scheduling
+- resumable final-render segment persistence
+- proxy stitching/index manifests used automatically by playback
+- color management/tone mapping and scopes
+- richer audio buses/effects and streaming loudness meter
+- real camera/browser/container conformance corpus
+- performance budgets/telemetry for decode, GPU, memory and export
 
-## Milestone 0.5 — production decode/render pipeline
+## 1.x — professional editing and collaboration
 
-Highest-priority next work:
-
-- MP4/MOV/WebM demux
-- WebCodecs video/audio decode queues
-- worker decode/prefetch architecture
-- proxy/thumbnail generation and derived-cache eviction
-- GPU texture cache
-- WebGPU layer compositor + shader effects
-- trim handles and cross-track drag/drop
-- offline audio render/automation
-- encoded video/audio mux/export
-- project package/media-copy workflow
-- deterministic preview-vs-export parity fixtures
-
-## Milestone 0.6 — professional editing
-
-- nested/compound compositions
-- transitions
-- masks and tracked masks
-- color-management pipeline
-- richer audio effects and buses
+- nested/compound compositions and transitions
+- masks/tracked masks
 - captions/transcripts
 - keyframe graph editor
-- scopes/meters
-- multicam model
-
-## Milestone 0.7 — collaboration + agent
-
-- operation log / stable author IDs
-- branches/merge semantics
-- multiplayer collaboration
-- review comments
-- production model provider adapters
-- permission/cost boundaries
-- agent edit-quality evaluation harness
+- multicam
+- operation log and multiplayer branches/merge
+- review/comments
+- production model-provider adapters and agent evaluation
 
 ## Long-term
 
@@ -95,6 +52,5 @@ Highest-priority next work:
 - 3D/scene workspace
 - MIDI/music composition
 - distributed render execution
-- plugin SDK
-- open interchange bridges
+- plugin SDK and open interchange bridges
 - responsive multi-output campaign automation

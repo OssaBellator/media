@@ -26,6 +26,36 @@ function box(type, ...payload) { const body = concat(payload); return concat([u3
 function fullBox(type, version, flags, ...payload) { return box(type, u8(version), u24(flags), ...payload); }
 function languageCode(code = 'und') { const text = String(code).padEnd(3, 'd').slice(0, 3).toLowerCase(); return ((text.charCodeAt(0) - 0x60) << 10) | ((text.charCodeAt(1) - 0x60) << 5) | (text.charCodeAt(2) - 0x60); }
 const IDENTITY_MATRIX = concat([u32(0x00010000),u32(0),u32(0),u32(0),u32(0x00010000),u32(0),u32(0),u32(0),u32(0x40000000)]);
+function rotationMatrix(degrees,width=0,height=0){
+  const normalized=((Math.round(Number(degrees)||0)%360)+360)%360;
+  if(normalized===90)return concat([u32(0),u32(0x00010000),u32(0),u32(0xffff0000),u32(0),u32(0),u32(Math.round(height*65536)),u32(0),u32(0x40000000)]);
+  if(normalized===180)return concat([u32(0xffff0000),u32(0),u32(0),u32(0),u32(0xffff0000),u32(0),u32(Math.round(width*65536)),u32(Math.round(height*65536)),u32(0x40000000)]);
+  if(normalized===270)return concat([u32(0),u32(0xffff0000),u32(0),u32(0x00010000),u32(0),u32(0),u32(0),u32(Math.round(width*65536)),u32(0x40000000)]);
+  return IDENTITY_MATRIX;
+}
+const COLOR_PRIMARIES={bt709:1,unspecified:2,bt470m:4,bt470bg:5,smpte170m:6,smpte240m:7,film:8,bt2020:9,smpte428:10,p3dci:11,p3d65:12};
+const COLOR_TRANSFER={bt709:1,unspecified:2,gamma22:4,gamma28:5,smpte170m:6,smpte240m:7,linear:8,log:9,logsqrt:10,iec6196624:11,bt1361:12,srgb:13,bt202010:14,bt202012:15,pq:16,smpte428:17,hlg:18};
+const COLOR_MATRIX={identity:0,bt709:1,unspecified:2,fcc:4,bt470bg:5,smpte170m:6,smpte240m:7,ycgco:8,bt2020nc:9,bt2020ncl:9,bt2020c:10};
+function enumValue(value,map,fallback=2){if(Number.isInteger(Number(value)))return Number(value);const key=String(value??'').toLowerCase().replace(/[^a-z0-9]/g,'');return map[key]??fallback;}
+function videoMetadataBoxes(track){
+  const config=track.config??{},parts=[];
+  const color=config.colorSpace??config.color??null;
+  if(color){parts.push(box('colr',ascii('nclx'),u16(enumValue(color.primaries,COLOR_PRIMARIES)),u16(enumValue(color.transfer,COLOR_TRANSFER)),u16(enumValue(color.matrix,COLOR_MATRIX)),u8(color.fullRange?0x80:0)));}
+  const ratio=config.pixelAspectRatio??config.pasp;
+  if(ratio){const h=Math.max(1,Math.round(Number(ratio.horizontal??ratio.hSpacing??ratio.h??ratio[0]??1))),v=Math.max(1,Math.round(Number(ratio.vertical??ratio.vSpacing??ratio.v??ratio[1]??1)));parts.push(box('pasp',u32(h),u32(v)));}
+  const cll=config.contentLightLevel??config.clli;
+  if(cll){parts.push(box('clli',u16(Math.max(0,Math.round(Number(cll.maxContentLightLevel??cll.maxCLL??0)))),u16(Math.max(0,Math.round(Number(cll.maxFrameAverageLightLevel??cll.maxFALL??0))))));}
+  const mastering=config.masteringDisplay??config.mdcv;
+  if(mastering){
+    const scaledChroma=(value)=>{const n=Number(value??0);return u16(Math.max(0,Math.min(50000,Math.round(n>1?n:n*50000))));};
+    const scaledLuminance=(value)=>{const n=Number(value??0);return u32(Math.max(0,Math.round(n>100000?n:n*10000)));};
+    const source=mastering.primaries??{};const array=Array.isArray(source)?source:null;
+    const red=array?[array[0],array[1]]:[source.r?.x,source.r?.y];const green=array?[array[2],array[3]]:[source.g?.x,source.g?.y];const blue=array?[array[4],array[5]]:[source.b?.x,source.b?.y];
+    const wp=mastering.whitePoint??{};const white=Array.isArray(wp)?wp:[wp.x,wp.y];
+    parts.push(box('mdcv',scaledChroma(red[0]),scaledChroma(red[1]),scaledChroma(green[0]),scaledChroma(green[1]),scaledChroma(blue[0]),scaledChroma(blue[1]),scaledChroma(white[0]),scaledChroma(white[1]),scaledLuminance(mastering.maxLuminance),scaledLuminance(mastering.minLuminance)));
+  }
+  return parts;
+}
 function descriptorLength(length) { let value = Number(length); const bytes = [value & 0x7f]; while ((value >>= 7)) bytes.unshift((value & 0x7f) | 0x80); return new Uint8Array(bytes); }
 function descriptor(tag, ...payload) { const body = concat(payload); return concat([u8(tag), descriptorLength(body.length), body]); }
 function samplePayload(sample) { const value = sample.payload ?? sample.bytes; if (value == null) throw new Error(`MP4 sample ${sample.trackId}:${sample.sequence ?? 0} has no payload`); const bytes = bytesOf(value); if (Number(sample.byteLength ?? 0) > 0 && Number(sample.byteLength) !== bytes.byteLength) throw new Error(`MP4 sample byteLength mismatch for ${sample.trackId}:${sample.sequence ?? 0}`); return bytes; }
@@ -50,18 +80,15 @@ function esds(track) {
 }
 function videoSampleEntry(track) {
   const codec = String(track.codec).split('.')[0];
-  if (!['avc1','avc3'].includes(codec)) throw new Error(`MP4 writer currently supports AVC video, received ${track.codec}`);
   const description = track.config?.description;
-  if (!description) throw new Error(`AVC track ${track.id} requires avcC decoder description`);
+  const supported={avc1:'avcC',avc3:'avcC',hvc1:'hvcC',hev1:'hvcC',av01:'av1C'};
+  const configBox=supported[codec];if(!configBox)throw new Error(`MP4 writer currently supports AVC/HEVC/AV1 video, received ${track.codec}`);
+  if (!description) throw new Error(`${codec} track ${track.id} requires ${configBox} decoder description`);
   const width = Number(track.config?.width ?? track.config?.codedWidth);
   const height = Number(track.config?.height ?? track.config?.codedHeight);
-  if (!width || !height) throw new Error(`AVC track ${track.id} requires width and height`);
-  const compressor = new Uint8Array(32); const name = ascii('Media AVC'); compressor[0] = Math.min(31, name.length); compressor.set(name.subarray(0, 31), 1);
-  return box(codec,
-    new Uint8Array(6), u16(1), new Uint8Array(16), u16(width), u16(height),
-    fixed1616(72), fixed1616(72), u32(0), u16(1), compressor, u16(0x18), u16(0xffff),
-    box('avcC', bytesOf(description))
-  );
+  if (!width || !height) throw new Error(`Video track ${track.id} requires width and height`);
+  const compressor = new Uint8Array(32); const name = ascii(`Media ${codec.toUpperCase()}`); compressor[0] = Math.min(31, name.length); compressor.set(name.subarray(0, 31), 1);
+  return box(codec,new Uint8Array(6),u16(1),new Uint8Array(16),u16(width),u16(height),fixed1616(72),fixed1616(72),u32(0),u16(1),compressor,u16(0x18),u16(0xffff),box(configBox,bytesOf(description)),...videoMetadataBoxes(track));
 }
 function audioSampleEntry(track) {
   if (!String(track.codec).startsWith('mp4a')) throw new Error(`MP4 writer currently supports AAC audio, received ${track.codec}`);
@@ -90,7 +117,7 @@ function mdia(track,samples,{fragmented=false}={}) { const duration=fragmented?0
 function tkhd(track,trackId,durationMovie,{fragmented=false}={}) {
   const width=track.type==='video'?Number(track.config?.width??track.config?.codedWidth??0):0;
   const height=track.type==='video'?Number(track.config?.height??track.config?.codedHeight??0):0;
-  return fullBox('tkhd',0,7,u32(0),u32(0),u32(trackId),u32(0),u32(fragmented?0:durationMovie),new Uint8Array(8),u16(0),u16(0),u16(track.type==='audio'?0x0100:0),u16(0),IDENTITY_MATRIX,fixed1616(width),fixed1616(height));
+  return fullBox('tkhd',0,7,u32(0),u32(0),u32(trackId),u32(0),u32(fragmented?0:durationMovie),new Uint8Array(8),u16(0),u16(0),u16(track.type==='audio'?0x0100:0),u16(0),track.type==='video'?rotationMatrix(track.config?.rotation,width,height):IDENTITY_MATRIX,fixed1616(width),fixed1616(height));
 }
 function editBox(track,samples,movieTimescale){if(!samples.length||!track._baseDts)return null;const emptyDuration=Math.max(0,Math.round(track._baseDts*movieTimescale/1_000_000));const mediaDurationMicros=samples.reduce((max,s)=>Math.max(max,(s.pts-track._baseDts)+s.duration),0);const mediaDuration=Math.max(0,Math.round(mediaDurationMicros*movieTimescale/1_000_000));return box('edts',fullBox('elst',0,0,u32(2),u32(emptyDuration),i32(-1),i16(1),i16(0),u32(mediaDuration),i32(0),i16(1),i16(0)));}
 function trak(track,trackId,samples,movieTimescale,{fragmented=false}={}) { const durationMicros=fragmented?0:samples.reduce((max,s)=>Math.max(max,s.pts+s.duration),0); const durationMovie=Math.round(durationMicros*movieTimescale/1_000_000); return box('trak',tkhd(track,trackId,durationMovie,{fragmented}),fragmented?null:editBox(track,samples,movieTimescale),mdia(track,samples,{fragmented})); }
