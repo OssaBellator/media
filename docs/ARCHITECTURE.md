@@ -1,42 +1,36 @@
 # Architecture
 
-## North-star architecture
+## North-star
 
-Media treats a project as one graph that can be projected into specialized creative views rather than treating each view as a separate application/file format.
+Media treats a project as one durable graph projected into specialized views rather than a bundle of application-specific files.
 
 ```text
-                         ┌───────────────┐
-                         │ Human / Agent │
-                         └───────┬───────┘
-                                 │ intent / gestures
-                                 ▼
-                       ┌───────────────────┐
-                       │ Operation boundary │
-                       │ schema + preflight │
-                       └─────────┬─────────┘
-                                 │ atomic edit
-                                 ▼
-                    ┌─────────────────────────┐
-                    │ Universal Creative Graph │
-                    └──────┬────────┬─────────┘
-                           │        │
-                 history ◄─┘        └─► semantic invariants
-                           │
-                           ▼
-                    ┌───────────────┐
-                    │ Evaluation     │
-                    │ time + graph   │
-                    └───────┬───────┘
-                            │ render/audio plan
-               ┌────────────┴────────────┐
-               ▼                         ▼
-        browser adapters          future native/WASM
-      Canvas2D/WebGPU/audio       codecs/GPU/render farm
+ Human gesture / Agent intent
+             │
+             ▼
+     Planner / UI command
+             │
+             ▼
+   operation schema + preflight
+             │
+             ▼
+   Universal Creative Graph ◄──── undo/redo
+             │
+      semantic invariants
+             │
+             ▼
+     composition evaluation
+             │
+       render/audio plans
+        ┌────┴────────┐
+        ▼             ▼
+ browser runtime   future native/cloud runtime
+ frame/audio/GPU   codecs/GPU/render farm
 ```
 
 ## 1. Universal Creative Graph
 
-Graph node kinds currently include:
+Current node kinds:
 
 - `project`
 - `asset`
@@ -47,13 +41,13 @@ Graph node kinds currently include:
 - `effect`
 - `output`
 
-Relationships are explicit edges (`contains`, `references`, `targets`, etc.). A clip references one shared asset; a Canvas layer can reference that same asset; neither needs to duplicate the media.
+Edges make containment, references and output/effect targets explicit. A source asset can be referenced by Canvas and Cut without duplication. Text and shape layers are native graph objects and therefore need no asset.
 
-The low-level graph validator checks structural integrity. `invariants.js` adds domain rules such as clip/source ranges, track compatibility, containment contracts, layer asset references, effect targets and valid keyframe data.
+Structural validation lives in `graph.js`; domain rules live in `invariants.js`.
 
-## 2. Operation boundary
+## 2. Durable mutation boundary
 
-All durable edits are represented as a small set of graph operations:
+Durable state changes use only:
 
 - `node.add`
 - `node.update`
@@ -61,76 +55,85 @@ All durable edits are represented as a small set of graph operations:
 - `edge.add`
 - `edge.remove`
 
-`preflightOperations` validates schemas, applies to immutable intermediate graph values and checks final project invariants. If anything fails, the original graph remains untouched and the thrown diagnostic identifies the failure phase/index where possible.
+High-level functions return operation batches. `preflightOperations` validates schemas, applies immutable intermediate values and checks final semantic invariants. Provider output, UI edits and future collaboration can therefore share the same contract.
 
-High-level editing functions (trim, split, transform, keyframe, effect creation, etc.) return these operations instead of mutating state directly.
+## 3. Timeline domain
 
-## 3. Timeline semantics
+`timeline.js` owns edit semantics independently of DOM interactions:
 
-`timeline.js` owns temporal edit behavior independent from the Studio UI:
-
-- snap-point discovery;
-- snapping;
-- move/track move;
-- trim;
-- split;
-- ripple delete;
-- ripple insert;
-- slip;
+- snap points and snapping;
+- move and track moves;
+- trim/split/slip;
+- duplicate;
+- roll edit;
+- blade-all;
+- ripple insert/delete/trim;
 - playback-rate changes;
 - overlap discovery;
+- track creation/state/lock enforcement;
 - timeline duration.
 
-Track lock state is enforced by editing functions, not merely drawn in the interface.
+## 4. Spatial and native graphics
 
-## 4. Spatial composition
+`transforms.js` defines position, scale, rotation, opacity, anchors and crop for both layers and clips.
 
-`transforms.js` defines a nondestructive transform primitive shared by layers and clips: position, scale, rotation, opacity, anchors and crop values.
+`text.js` creates editable typography layers. `shapes.js` creates native rectangle/ellipse layers. Both share transforms, keyframes, effects and evaluation with source-backed media layers.
 
-A Canvas layer is just another graph node containing a reference to a shared asset. Its transform/effects/keyframes are metadata, leaving source media untouched.
+## 5. Motion/effects
 
-## 5. Motion and effects
+`keyframes.js` evaluates numeric animation at arbitrary time. `effects.js` represents ordered nondestructive effect nodes targeted at layers/clips.
 
-`keyframes.js` stores numeric property keyframes on graph nodes and evaluates them at arbitrary time. The implementation currently supports linear, hold, ease-in, ease-out and ease-in-out interpolation.
+No animation/effect result is flattened into source media by the semantic engine.
 
-`effects.js` represents ordered nondestructive effect nodes targeting layers/clips. Studio currently previews several visual effects with browser CSS filters, while the core evaluation plan remains renderer-neutral.
+## 6. Evaluation
 
-## 6. Evaluation, not flattening
+`evaluation.js` maps graph + time to a renderer-neutral plan containing source-backed visuals, text, shapes, active timeline clips, source time, evaluated transforms/effects and audio items.
 
-`evaluation.js` converts graph + time into a renderer-neutral plan containing:
+This is the key abstraction separating editing semantics from rendering implementation.
 
-- composition dimensions/background/frame;
-- active Canvas layers;
-- active timeline clips;
-- source time for each clip;
-- evaluated transforms/keyframes;
-- active effect stacks;
-- active audio items.
+## 7. Media scheduling/cache
 
-This is the seam for a future high-performance renderer. The editor should not need to change its project model when the implementation moves from browser DOM/CSS to WebGPU/WASM/native kernels.
+`cache.js` provides two reusable runtime primitives:
 
-## 7. Media adapters
+- weighted LRU storage with explicit memory budgets;
+- priority/deduplicating asynchronous decode scheduling.
 
-Browser-specific code is deliberately outside `packages/core`.
+The browser frame provider consumes these primitives. Native/worker runtimes should preserve the contract rather than introducing UI-specific caches.
 
-`apps/studio/media-engine.js` currently handles:
+## 8. Audio
 
-- metadata probing;
-- sampled source fingerprints;
-- audio waveform decoding/downsampling;
-- browser video-frame capture fallback;
-- capability detection.
+`audio.js` owns dB/gain conversion, pan math, fades, sample/time mapping, clip audio edits and mix plans. `apps/studio/audio-engine.js` translates those semantics into AudioContext nodes for preview.
 
-`gpu-compositor.js` boots a real WebGPU canvas when available and falls back to Canvas2D. It is intentionally a foundation rather than a claim of a complete GPU media renderer.
+Offline/export mixing remains a runtime concern.
 
-## 8. Storage
+## 9. Deliver
 
-The graph is stored separately from large source blobs in IndexedDB. Graph assets use stable `media://asset/<id>` locators. Browser object URLs are ephemeral runtime bindings and never form the project identity.
+`deliver.js` treats output intent as project data. Output nodes target compositions and generate deterministic manifests containing settings, dependencies, frame ranges, audio summaries and render signatures.
 
-This separation enables relinking and later supports proxies, caches, cloud/object storage and packaged projects without changing core graph identity.
+This makes caching/resume/distributed rendering possible without changing editing state.
 
-## 9. Planner/model providers
+## 10. Storage/source identity
 
-`providers.js` defines a provider registry and validated async planning contract. A provider receives graph + intent + context and must return `{ summary, operations }`.
+Graph assets store metadata and logical locators; source bytes live behind storage adapters. Browser storage separates:
 
-Model output is therefore data to validate, not privileged code to execute.
+- current graph;
+- source blobs + fingerprint metadata;
+- derived artifacts.
+
+Project-file v2 includes a formal source manifest. Relinking prefers source fingerprints over filenames.
+
+## 11. Browser runtime
+
+Browser-specific modules remain outside core:
+
+- `media-engine.js` — probing, waveform, fingerprint, frame fallback;
+- `render-engine.js` — frame provider/cache/scheduler + Canvas2D plan rendering;
+- `audio-engine.js` — AudioContext preview scheduling;
+- `gpu-compositor.js` — WebGPU/Canvas2D surface bootstrap;
+- `storage.js` — IndexedDB adapters.
+
+## 12. Planner/model providers
+
+Providers receive intent + a sanitized project snapshot and return `{summary, operations}`. HTTP providers are supported through the same validation boundary. Local source URIs and heavyweight waveform samples are omitted from the remote snapshot.
+
+Model output is untrusted data, never privileged code or direct graph mutation.

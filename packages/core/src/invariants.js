@@ -36,6 +36,10 @@ export function collectInvariantViolations(graph) {
     if (!positive(clip.props.duration)) violations.push({ code: "clip.duration", nodeId: clip.id, message: `Clip ${clip.id} duration must be positive` });
     if (!nonNegative(clip.props.inPoint ?? 0)) violations.push({ code: "clip.in-point", nodeId: clip.id, message: `Clip ${clip.id} inPoint must be non-negative` });
     if (!positive(clip.props.playbackRate ?? 1)) violations.push({ code: "clip.playback-rate", nodeId: clip.id, message: `Clip ${clip.id} playbackRate must be positive` });
+    if (clip.props.gainDb !== undefined && (!finite(clip.props.gainDb) || Number(clip.props.gainDb) < -96 || Number(clip.props.gainDb) > 24)) violations.push({ code: "clip.gain-db", nodeId: clip.id, message: `Clip ${clip.id} gainDb must be between -96 and 24` });
+    if (clip.props.pan !== undefined && (!finite(clip.props.pan) || Number(clip.props.pan) < -1 || Number(clip.props.pan) > 1)) violations.push({ code: "clip.pan", nodeId: clip.id, message: `Clip ${clip.id} pan must be between -1 and 1` });
+    if (clip.props.fadeIn !== undefined && !nonNegative(clip.props.fadeIn)) violations.push({ code: "clip.fade-in", nodeId: clip.id, message: `Clip ${clip.id} fadeIn must be non-negative` });
+    if (clip.props.fadeOut !== undefined && !nonNegative(clip.props.fadeOut)) violations.push({ code: "clip.fade-out", nodeId: clip.id, message: `Clip ${clip.id} fadeOut must be non-negative` });
     const containment = edgesTo(graph, clip.id, "contains").filter((edge) => edge.from === trackId);
     if (containment.length !== 1) violations.push({ code: "clip.containment", nodeId: clip.id, message: `Clip ${clip.id} must be contained by its track` });
     const reference = edgesFrom(graph, clip.id, "references").filter((edge) => edge.to === assetId);
@@ -53,10 +57,20 @@ export function collectInvariantViolations(graph) {
 
   for (const layer of nodesByKind(graph, "layer")) {
     if (layer.props.role === "marker") continue;
-    const asset = graph.nodes[layer.props.assetId];
-    if (!asset || asset.kind !== "asset") violations.push({ code: "layer.asset", nodeId: layer.id, message: `Layer ${layer.id} references an invalid asset` });
     const parents = edgesTo(graph, layer.id, "contains").map((edge) => graph.nodes[edge.from]).filter((node) => node?.kind === "composition");
     if (parents.length !== 1) violations.push({ code: "layer.parent", nodeId: layer.id, message: `Layer ${layer.id} must belong to exactly one composition` });
+    if (layer.props.role === "text") {
+      if (typeof layer.props.text !== "string") violations.push({ code: "layer.text", nodeId: layer.id, message: `Text layer ${layer.id} requires string text` });
+      if (!positive(layer.props.fontSize)) violations.push({ code: "layer.font-size", nodeId: layer.id, message: `Text layer ${layer.id} requires a positive fontSize` });
+      continue;
+    }
+    if (layer.props.role === "shape") {
+      if (!["rectangle", "ellipse"].includes(layer.props.shapeType)) violations.push({ code: "layer.shape-type", nodeId: layer.id, message: `Shape layer ${layer.id} has an unsupported shape type` });
+      if (!positive(layer.props.width) || !positive(layer.props.height)) violations.push({ code: "layer.shape-dimensions", nodeId: layer.id, message: `Shape layer ${layer.id} requires positive dimensions` });
+      continue;
+    }
+    const asset = graph.nodes[layer.props.assetId];
+    if (!asset || asset.kind !== "asset") violations.push({ code: "layer.asset", nodeId: layer.id, message: `Layer ${layer.id} references an invalid asset` });
     if (asset && !edgesFrom(graph, layer.id, "references").some((edge) => edge.to === asset.id)) violations.push({ code: "layer.reference", nodeId: layer.id, message: `Layer ${layer.id} must reference its asset` });
   }
 
@@ -64,6 +78,17 @@ export function collectInvariantViolations(graph) {
     const targets = edgesFrom(graph, effect.id, "targets");
     if (targets.length !== 1 || !["layer", "clip"].includes(graph.nodes[targets[0]?.to]?.kind)) violations.push({ code: "effect.target", nodeId: effect.id, message: `Effect ${effect.id} must target exactly one layer or clip` });
     if (typeof effect.props.effectType !== "string" || !effect.props.effectType) violations.push({ code: "effect.type", nodeId: effect.id, message: `Effect ${effect.id} requires an effectType` });
+  }
+
+  for (const output of nodesByKind(graph, "output")) {
+    const composition = graph.nodes[output.props.compositionId];
+    if (!composition || composition.kind !== "composition") violations.push({ code: "output.composition", nodeId: output.id, message: `Output ${output.id} references an invalid composition` });
+    if (!positive(output.props.width) || !positive(output.props.height)) violations.push({ code: "output.dimensions", nodeId: output.id, message: `Output ${output.id} must have positive dimensions` });
+    if (!positive(output.props.fps)) violations.push({ code: "output.fps", nodeId: output.id, message: `Output ${output.id} must have a positive fps` });
+    if (!nonNegative(output.props.rangeStart) || !nonNegative(output.props.rangeEnd) || Number(output.props.rangeEnd) < Number(output.props.rangeStart)) violations.push({ code: "output.range", nodeId: output.id, message: `Output ${output.id} has an invalid render range` });
+    const targets = edgesFrom(graph, output.id, "targets").filter((edge) => edge.to === output.props.compositionId);
+    if (targets.length !== 1) violations.push({ code: "output.target", nodeId: output.id, message: `Output ${output.id} must target its composition exactly once` });
+    if (!projectChildren.has(output.id)) violations.push({ code: "output.parent", nodeId: output.id, message: `Output ${output.id} must be contained by the project` });
   }
 
   for (const node of [...nodesByKind(graph, "layer"), ...nodesByKind(graph, "clip")]) {

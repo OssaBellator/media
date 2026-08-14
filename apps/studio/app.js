@@ -3,13 +3,20 @@ import {
   addAsset,
   applyOperations,
   assertProjectInvariants,
+  buildSourceManifest,
+  bladeAllAtTimeOperations,
   commit,
   createAsset,
   createHistory,
   createLayerForAssetOperations,
   createLocalPlannerProvider,
   createMediaProject,
+  createOutputOperations,
+  createRenderManifest,
+  createShapeLayerOperations,
   createTrackOperations,
+  createTextLayerOperations,
+  duplicateClipOperations,
   createTransport,
   createEffectOperations,
   effectsForTarget,
@@ -27,9 +34,11 @@ import {
   redo,
   resetTransformOperations,
   rippleDeleteClipOperations,
+  rippleTrimEndOperations,
   seekTransport,
   serializeProject,
   setKeyframeOperations,
+  setClipAudioOperations,
   setPlaybackRateOperations,
   setTrackStateOperations,
   slipClipOperations,
@@ -41,19 +50,25 @@ import {
   transformForNode,
   transformNodeOperations,
   updateEffectOperations,
+  updateShapeLayerOperations,
+  updateTextLayerOperations,
   trimClipOperations,
   undo,
 } from "/packages/core/src/index.js";
 import { mediaCapabilities, probeMedia } from "./media-engine.js";
 import { createCompositor } from "./gpu-compositor.js";
 import { createStudioView, formatTime } from "./view.js";
-import { loadAssetBlob, loadStoredGraph, localAssetUri, saveAssetBlob, saveStoredGraph } from "./storage.js";
+import { BrowserFrameProvider, canvasToBlob, renderPlanToCanvas2D } from "./render-engine.js";
+import { BrowserAudioMixer } from "./audio-engine.js";
+import { findStoredAssetByHash, loadAssetBlob, loadStoredGraph, localAssetUri, saveAssetBlob, saveStoredGraph } from "./storage.js";
 
-const APP_VERSION = "0.3.0";
+const APP_VERSION = "0.4.0";
 const app = document.querySelector("#app");
 const plannerRegistry = new PlannerRegistry().register(createLocalPlannerProvider());
 const capabilities = mediaCapabilities();
 const assetUrls = new Map();
+const frameProvider = new BrowserFrameProvider({ blobResolver: resolveAssetBlob, maxCacheBytes: 256 * 1024 * 1024, concurrency: 2 });
+const audioMixer = new BrowserAudioMixer({ blobResolver: resolveAssetBlob });
 let history = createHistory(createMediaProject("Untitled project"));
 let workspace = "canvas";
 let selectedId = history.present.projectId;
@@ -161,8 +176,15 @@ function bindEvents() {
   document.querySelectorAll("[data-motion-nudge]").forEach((button) => button.addEventListener("click", () => nudgeMotionProperty(button.dataset.motionNudge, Number(button.dataset.delta))));
   document.querySelectorAll("[data-add-effect]").forEach((button) => button.addEventListener("click", () => addSelectedEffect(button.dataset.addEffect)));
   document.querySelectorAll("[data-toggle-effect]").forEach((button) => button.addEventListener("click", () => toggleSelectedEffect(button.dataset.toggleEffect)));
+  document.querySelector("#text-layer-input")?.addEventListener("change", (event) => updateSelectedText({ text: event.target.value }));
+  document.querySelectorAll("[data-text-style]").forEach((button) => button.addEventListener("click", () => executeTextStyle(button.dataset.textStyle)));
+  document.querySelectorAll("[data-shape-style]").forEach((button) => button.addEventListener("click", () => executeShapeStyle(button.dataset.shapeStyle)));
+  document.querySelectorAll("[data-shape-fill]").forEach((button) => button.addEventListener("click", () => executeShapeStyle(null, button.dataset.shapeFill)));
   document.querySelectorAll("[data-transport]").forEach((button) => button.addEventListener("click", () => executeTransportAction(button.dataset.transport)));
   document.querySelectorAll("[data-rate]").forEach((button) => button.addEventListener("click", () => setSelectedRate(Number(button.dataset.rate))));
+  document.querySelectorAll("[data-audio-action]").forEach((button) => button.addEventListener("click", () => executeAudioAction(button.dataset.audioAction)));
+  document.querySelectorAll("[data-create-output]").forEach((button) => button.addEventListener("click", () => createDeliveryOutput(button.dataset.createOutput)));
+  document.querySelectorAll("[data-render-action]").forEach((button) => button.addEventListener("click", (event) => { event.stopPropagation(); executeRenderAction(button.dataset.renderAction, button.dataset.outputId); }));
   document.querySelector("[data-insert-selected]")?.addEventListener("click", insertSelectedAtPlayhead);
   document.querySelector("#file-input")?.addEventListener("change", importFiles);
   document.querySelector("#project-input")?.addEventListener("change", importProjectFile);
@@ -194,6 +216,16 @@ function applyEdit(label, operations, { selectId } = {}) {
 
 function executeCanvasAction(action) {
   const node = selectedNode();
+  if (action === "add-text") {
+    const operations = createTextLayerOperations(graph(), { text: "Title", transform: { x: 0, y: 0 } });
+    const layer = operations.find((operation) => operation.type === "node.add")?.node;
+    return applyEdit("Add text layer", operations, { selectId: layer?.id });
+  }
+  if (action === "add-shape") {
+    const operations = createShapeLayerOperations(graph(), { shapeType: "rectangle", transform: { x: 0, y: 0 } });
+    const layer = operations.find((operation) => operation.type === "node.add")?.node;
+    return applyEdit("Add shape layer", operations, { selectId: layer?.id });
+  }
   if (action === "add-layer") {
     const asset = node.kind === "asset" ? node : assetForNode(node);
     if (!asset) return;
@@ -217,6 +249,32 @@ function executeCanvasAction(action) {
   if (action === "opacity-down") patch.opacity = transform.opacity - 0.1;
   if (action === "opacity-up") patch.opacity = transform.opacity + 0.1;
   if (Object.keys(patch).length) applyEdit("Transform Canvas layer", transformNodeOperations(graph(), node.id, patch));
+}
+
+function updateSelectedText(patch) {
+  const layer = selectedNode();
+  if (layer.kind !== "layer" || layer.props.role !== "text") return;
+  applyEdit("Edit text layer", updateTextLayerOperations(graph(), layer.id, patch));
+}
+function executeTextStyle(action) {
+  const layer = selectedNode();
+  if (layer.kind !== "layer" || layer.props.role !== "text") return;
+  const size = Number(layer.props.fontSize ?? 96);
+  const weight = Number(layer.props.fontWeight ?? 700);
+  if (action === "size-down") return updateSelectedText({ fontSize: Math.max(8, size - 8) });
+  if (action === "size-up") return updateSelectedText({ fontSize: size + 8 });
+  if (action === "weight") return updateSelectedText({ fontWeight: weight >= 800 ? 400 : weight + 100 });
+}
+
+function executeShapeStyle(action, fill) {
+  const layer = selectedNode();
+  if (layer.kind !== "layer" || layer.props.role !== "shape") return;
+  if (fill) return applyEdit("Change shape fill", updateShapeLayerOperations(graph(), layer.id, { fill }));
+  const width = Number(layer.props.width ?? 500);
+  const height = Number(layer.props.height ?? 300);
+  if (action === "toggle-type") return applyEdit("Change shape type", updateShapeLayerOperations(graph(), layer.id, { shapeType: layer.props.shapeType === "ellipse" ? "rectangle" : "ellipse" }));
+  if (action === "size-down") return applyEdit("Resize shape", updateShapeLayerOperations(graph(), layer.id, { width: Math.max(40, width * 0.85), height: Math.max(40, height * 0.85) }));
+  if (action === "size-up") return applyEdit("Resize shape", updateShapeLayerOperations(graph(), layer.id, { width: width * 1.15, height: height * 1.15 }));
 }
 
 function setSelectedKeyframe(property) {
@@ -272,6 +330,13 @@ function executeTimelineAction(action) {
     return applyEdit("Split clip", splitClipOperations(graph(), clip.id, at));
   }
   if (action === "ripple-delete") return applyEdit("Ripple delete clip", rippleDeleteClipOperations(graph(), clip.id));
+  if (action === "duplicate") {
+    const operations = duplicateClipOperations(graph(), clip.id, { start: start + duration });
+    const duplicate = operations.find((operation) => operation.type === "node.add")?.node;
+    return applyEdit("Duplicate clip", operations, { selectId: duplicate?.id });
+  }
+  if (action === "ripple-trim-end") return applyEdit("Ripple trim clip end", rippleTrimEndOperations(graph(), clip.id, Math.max(start + 0.1, start + duration - Math.min(1, duration / 2))));
+  if (action === "blade-all") return applyEdit("Blade all at playhead", bladeAllAtTimeOperations(graph(), transport.time));
 }
 
 function setSelectedRate(rate) {
@@ -283,6 +348,77 @@ function insertSelectedAtPlayhead() {
   const asset = selectedNode();
   if (asset.kind !== "asset") return;
   applyEdit(`Insert ${asset.name} at playhead`, insertAssetOperations(graph(), asset.id, { start: transport.time, ripple: true, snap: true }));
+}
+
+function executeAudioAction(action) {
+  const clip = selectedNode();
+  if (clip.kind !== "clip") return;
+  const currentGain = Number(clip.props.gainDb ?? 0);
+  const currentPan = Number(clip.props.pan ?? 0);
+  if (action === "gain-down") return applyEdit("Lower clip gain", setClipAudioOperations(graph(), clip.id, { gainDb: currentGain - 3 }));
+  if (action === "gain-up") return applyEdit("Raise clip gain", setClipAudioOperations(graph(), clip.id, { gainDb: currentGain + 3 }));
+  if (action === "pan-left") return applyEdit("Pan clip left", setClipAudioOperations(graph(), clip.id, { pan: Math.max(-1, currentPan - 0.25) }));
+  if (action === "pan-center") return applyEdit("Center clip pan", setClipAudioOperations(graph(), clip.id, { pan: 0 }));
+  if (action === "pan-right") return applyEdit("Pan clip right", setClipAudioOperations(graph(), clip.id, { pan: Math.min(1, currentPan + 0.25) }));
+  if (action === "fade") {
+    const fade = Math.min(1, Number(clip.props.duration ?? 1) / 4);
+    return applyEdit("Set clip fades", setClipAudioOperations(graph(), clip.id, { fadeIn: fade, fadeOut: fade }));
+  }
+}
+
+function createDeliveryOutput(preset) {
+  const operations = createOutputOperations(graph(), { preset });
+  const output = operations.find((operation) => operation.type === "node.add")?.node;
+  applyEdit(`Create ${output?.name ?? preset} output`, operations, { selectId: output?.id });
+}
+
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+async function executeRenderAction(action, outputId) {
+  const output = graph().nodes[outputId];
+  if (!output || output.kind !== "output") return;
+  if (action === "select") { selectedId = output.id; render(); return; }
+  if (action === "remove") return applyEdit(`Remove ${output.name}`, [{ type: "node.remove", nodeId: output.id }]);
+  if (action === "manifest") {
+    const manifest = createRenderManifest(graph(), output.id);
+    const blob = new Blob([JSON.stringify(manifest, null, 2)], { type: "application/json" });
+    downloadBlob(blob, `${safeFilename(output.name)}.render.json`);
+    activity.unshift({ title: "Render manifest exported", detail: `${manifest.frameCount} frames · ${manifest.dependencies.length} source dependencies · ${manifest.signature}`, operations: ["evaluate", "manifest"] });
+    render();
+    return;
+  }
+  if (action === "still") await renderOutputStill(output);
+}
+
+function safeFilename(value) { return String(value || "output").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "output"; }
+
+async function renderOutputStill(output) {
+  persistenceStatus = `Rendering ${output.name}…`; render();
+  try {
+    const time = Math.max(Number(output.props.rangeStart ?? 0), Math.min(transport.time, Number(output.props.rangeEnd ?? transport.time)));
+    const plan = evaluateComposition(graph(), { compositionId: output.props.compositionId, time });
+    const sourceCanvas = document.createElement("canvas");
+    const result = await renderPlanToCanvas2D(sourceCanvas, plan, { assetResolver: (assetId) => graph().nodes[assetId], frameProvider });
+    const targetCanvas = document.createElement("canvas");
+    targetCanvas.width = Number(output.props.width);
+    targetCanvas.height = Number(output.props.height);
+    targetCanvas.getContext("2d").drawImage(sourceCanvas, 0, 0, targetCanvas.width, targetCanvas.height);
+    const blob = await canvasToBlob(targetCanvas, "image/png");
+    downloadBlob(blob, `${safeFilename(output.name)}-${String(plan.frame).padStart(6, "0")}.png`);
+    persistenceStatus = "Still frame rendered locally";
+    activity.unshift({ title: "Frame rendered", detail: `${output.name} frame ${plan.frame} at ${formatTime(time)} using ${result.errors.length ? `${result.errors.length} offline/failed source(s)` : "all available sources"}.`, operations: ["evaluate", "decode", "composite", "png"] });
+  } catch (error) {
+    persistenceStatus = "Render failed";
+    activity.unshift({ title: "Frame render failed", detail: error.message, operations: [] });
+  }
+  render();
 }
 
 function executeTransportAction(action) {
@@ -299,10 +435,13 @@ function executeTransportAction(action) {
 function startTransportPlayback() {
   transport = playTransport(transport.time >= transport.duration ? seekTransport(transport, 0) : transport);
   transportLastTick = performance.now();
-  const media = document.querySelector(".cut-preview video, .cut-preview audio");
+  audioMixer.play(graph(), transport.time).then((result) => {
+    if (result?.scheduled) persistenceStatus = `Playing ${result.scheduled} audio source${result.scheduled === 1 ? "" : "s"}`;
+  }).catch(() => {});
+  const media = document.querySelector(".cut-preview video");
   const node = selectedNode();
   if (media && node.kind === "clip") {
-    try { media.currentTime = sourceTimeForClip(node, transport.time); media.playbackRate = Number(node.props.playbackRate ?? 1); media.play().catch(() => {}); } catch {}
+    try { media.muted = true; media.currentTime = sourceTimeForClip(node, transport.time); media.playbackRate = Number(node.props.playbackRate ?? 1); media.play().catch(() => {}); } catch {}
   }
   const loop = (now) => {
     const elapsed = (now - transportLastTick) / 1000;
@@ -310,7 +449,7 @@ function startTransportPlayback() {
     transport = tickTransport(transport, elapsed);
     updateTransportDom();
     if (transport.playing) transportFrame = requestAnimationFrame(loop);
-    else { transportFrame = null; document.querySelector(".cut-preview video, .cut-preview audio")?.pause?.(); }
+    else { transportFrame = null; audioMixer.stop(); document.querySelector(".cut-preview video, .cut-preview audio")?.pause?.(); }
   };
   transportFrame = requestAnimationFrame(loop);
 }
@@ -318,6 +457,7 @@ function stopTransportPlayback() {
   transport = pauseTransport(transport);
   if (transportFrame) cancelAnimationFrame(transportFrame);
   transportFrame = null;
+  audioMixer.stop();
   document.querySelector(".cut-preview video, .cut-preview audio")?.pause?.();
 }
 function updateTransportDom() {
@@ -453,7 +593,8 @@ async function importFiles(event) {
     assetUrls.set(asset.id, URL.createObjectURL(file));
   }
   history = commit(history, next, `Import ${files.length} media file${files.length === 1 ? "" : "s"}`);
-  await Promise.all(saved.map(([asset, file]) => saveAssetBlob(asset.id, file).catch(() => false)));
+  await Promise.all(saved.map(([asset, file]) => saveAssetBlob(asset.id, file, { ...asset.props, name: asset.name }).catch(() => false)));
+  frameProvider.clear(); audioMixer.clearCache();
   await persistGraph();
   const newestAsset = nodesByKind(graph(), "asset").at(-1);
   if (newestAsset) selectedId = newestAsset.id;
@@ -472,9 +613,10 @@ async function relinkSelectedAsset(event) {
   }
   persistenceStatus = `Analyzing replacement for ${asset.name}…`; render();
   const metadata = await probeMedia(file);
-  await saveAssetBlob(asset.id, file);
+  await saveAssetBlob(asset.id, file, { ...asset.props, ...metadata, name: file.name, mimeType: file.type, size: file.size });
   if (assetUrls.has(asset.id)) URL.revokeObjectURL(assetUrls.get(asset.id));
   assetUrls.set(asset.id, URL.createObjectURL(file));
+  frameProvider.clear(); audioMixer.clearCache();
   const patch = { uri: localAssetUri(asset.id), mimeType: file.type, size: file.size, ...metadata };
   applyEdit(`Relink ${asset.name}`, [{ type: "node.update", nodeId: asset.id, patch: { props: patch } }], { selectId: asset.id });
 }
@@ -489,9 +631,10 @@ async function importProjectFile(event) {
     selectedId = graph().projectId;
     workspace = "canvas";
     syncTransport(); transport = seekTransport(transport, 0);
-    await hydrateAssetUrls();
+    const fingerprintMatches = await hydrateAssetUrls();
     await persistGraph();
-    activity.unshift({ title: "Project opened", detail: parsed.migratedFrom ? `Opened and migrated ${parsed.migratedFrom}. Existing local media is automatically matched by stable asset IDs.` : `Opened Media project file v${parsed.fileVersion}.`, operations: ["deserialize", "validate", "hydrate"] });
+    const matchDetail = fingerprintMatches ? ` ${fingerprintMatches} source${fingerprintMatches === 1 ? "" : "s"} were relinked automatically by fingerprint.` : "";
+    activity.unshift({ title: "Project opened", detail: `${parsed.migratedFrom ? `Opened and migrated ${parsed.migratedFrom}.` : `Opened Media project file v${parsed.fileVersion}.`}${matchDetail}`, operations: ["deserialize", "validate", "hydrate", ...(fingerprintMatches ? ["fingerprint-relink"] : [])] });
   } catch (error) { activity.unshift({ title: "Project open failed", detail: error.message, operations: [] }); }
   render();
 }
@@ -512,17 +655,16 @@ async function executeIntent(intent) {
 
 function exportProject() {
   const portable = structuredClone(graph());
-  const manifest = [];
   for (const asset of nodesByKind(portable, "asset")) {
     if (assetUrls.has(asset.id) || String(asset.props.uri).startsWith("media://") || String(asset.props.uri).startsWith("blob:")) asset.props.uri = localAssetUri(asset.id);
-    manifest.push({ id: asset.id, name: asset.name, mediaKind: asset.props.mediaKind, mimeType: asset.props.mimeType, size: asset.props.size, duration: asset.props.duration, width: asset.props.width, height: asset.props.height, hash: asset.props.hash ?? null });
   }
-  const payload = serializeProject(portable, { appVersion: APP_VERSION, exportedAt: new Date().toISOString(), assets: manifest });
+  const manifest = buildSourceManifest(portable);
+  const payload = serializeProject(portable, { appVersion: APP_VERSION, exportedAt: new Date().toISOString(), sourceCount: manifest.length });
   const blob = new Blob([payload], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
-  anchor.download = `${portable.nodes[portable.projectId].name.toLowerCase().replace(/[^a-z0-9]+/g, "-") || "project"}.media.json`;
+  anchor.download = `${safeFilename(portable.nodes[portable.projectId].name || "project")}.media.json`;
   anchor.click(); URL.revokeObjectURL(url);
 }
 
@@ -536,10 +678,34 @@ async function persistGraph() {
 async function hydrateAssetUrls() {
   for (const url of assetUrls.values()) URL.revokeObjectURL(url);
   assetUrls.clear();
+  let fingerprintMatches = 0;
   await Promise.all(nodesByKind(graph(), "asset").map(async (asset) => {
-    const blob = await loadAssetBlob(asset.id).catch(() => null);
+    let blob = await loadAssetBlob(asset.id).catch(() => null);
+    if (!blob && asset.props.hash) {
+      const stored = await findStoredAssetByHash(asset.props.hash).catch(() => null);
+      if (stored?.blob) {
+        blob = stored.blob;
+        fingerprintMatches += 1;
+        await saveAssetBlob(asset.id, blob, { ...asset.props, name: asset.name }).catch(() => false);
+      }
+    }
     if (blob) assetUrls.set(asset.id, URL.createObjectURL(blob));
   }));
+  return fingerprintMatches;
+}
+
+async function resolveAssetBlob(assetId, asset) {
+  const direct = await loadAssetBlob(assetId).catch(() => null);
+  if (direct) return direct;
+  if (asset?.props?.hash) {
+    const stored = await findStoredAssetByHash(asset.props.hash).catch(() => null);
+    if (stored?.blob) return stored.blob;
+  }
+  const uri = previewUri(asset);
+  if (uri && !uri.startsWith("blob:")) {
+    try { return await fetch(uri).then((response) => response.ok ? response.blob() : null); } catch {}
+  }
+  return null;
 }
 
 async function bootstrap() {
@@ -568,6 +734,7 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "ArrowRight" && ["cut", "motion"].includes(workspace)) { event.preventDefault(); executeTransportAction("step-forward"); }
   if (event.key.toLowerCase() === "m" && ["cut", "motion"].includes(workspace)) { event.preventDefault(); executeIntent(`add marker Marker at ${transport.time.toFixed(3)}s`); }
   if (event.key.toLowerCase() === "s" && workspace === "cut" && selectedNode().kind === "clip") { event.preventDefault(); executeTimelineAction("split"); }
+  if (event.key.toLowerCase() === "b" && workspace === "cut") { event.preventDefault(); const operations = bladeAllAtTimeOperations(graph(), transport.time); if (operations.length) applyEdit("Blade all at playhead", operations); }
 });
 
 await bootstrap();

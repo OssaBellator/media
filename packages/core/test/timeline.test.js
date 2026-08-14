@@ -3,8 +3,10 @@ import test from "node:test";
 import {
   addAsset,
   applyOperations,
+  bladeAllAtTimeOperations,
   createAsset,
   createTrackOperations,
+  duplicateClipOperations,
   createMediaProject,
   findTimelineOverlaps,
   insertAssetOperations,
@@ -12,6 +14,8 @@ import {
   nodesByKind,
   planIntent,
   rippleDeleteClipOperations,
+  rippleTrimEndOperations,
+  rollEditOperations,
   setPlaybackRateOperations,
   setTrackStateOperations,
   slipClipOperations,
@@ -110,7 +114,6 @@ test("detects overlaps after a non-ripple move", () => {
   assert.deepEqual(findTimelineOverlaps(graph, clips[0].props.trackId), [[clips[0].id, clips[1].id]]);
 });
 
-
 test("creates additional tracks and enforces track locks", () => {
   let graph = projectWithTimeline(1);
   graph = applyOperations(graph, createTrackOperations(graph, { mediaKind: "visual" }));
@@ -127,4 +130,47 @@ test("mute and lock state are graph operations rather than UI-only flags", () =>
   graph = applyOperations(graph, setTrackStateOperations(graph, track.id, { muted: true, locked: true }));
   assert.equal(graph.nodes[track.id].props.muted, true);
   assert.equal(graph.nodes[track.id].props.locked, true);
+});
+
+test("duplicates clips while preserving nondestructive source/edit state", () => {
+  let graph = projectWithTimeline(1, 8);
+  const clip = nodesByKind(graph, "clip")[0];
+  graph = applyOperations(graph, setPlaybackRateOperations(graph, clip.id, 2));
+  graph = applyOperations(graph, duplicateClipOperations(graph, clip.id, { start: 5 }));
+  const clips = nodesByKind(graph, "clip").sort((a, b) => a.props.start - b.props.start);
+  assert.equal(clips.length, 2);
+  assert.equal(clips[1].props.playbackRate, 2);
+  assert.equal(clips[1].props.assetId, clips[0].props.assetId);
+});
+
+test("roll edits move a shared edit point without changing combined duration", () => {
+  let graph = projectWithTimeline(2, 10);
+  const clips = nodesByKind(graph, "clip").sort((a, b) => a.props.start - b.props.start);
+  graph = applyOperations(graph, trimClipOperations(graph, clips[0].id, { edge: "end", time: 5 }));
+  graph = applyOperations(graph, moveClipOperations(graph, clips[1].id, { start: 5 }));
+  graph = applyOperations(graph, trimClipOperations(graph, clips[1].id, { edge: "start", time: 5 }));
+  graph = applyOperations(graph, rollEditOperations(graph, clips[0].id, clips[1].id, 6));
+  assert.equal(graph.nodes[clips[0].id].props.duration, 6);
+  assert.equal(graph.nodes[clips[1].id].props.start, 6);
+  assert.equal(graph.nodes[clips[1].id].props.duration, 9);
+});
+
+test("blade all splits every unlocked clip intersecting the playhead", () => {
+  let graph = projectWithTimeline(1, 8);
+  const video = nodesByKind(graph, "asset")[0];
+  graph = addAsset(graph, createAsset({ name: "audio.wav", mimeType: "audio/wav", duration: 8, uri: "memory://audio" }));
+  const audio = nodesByKind(graph, "asset").at(-1);
+  graph = applyOperations(graph, insertAssetOperations(graph, audio.id, { start: 0, ripple: false, snap: false }));
+  graph = applyOperations(graph, bladeAllAtTimeOperations(graph, 4));
+  assert.equal(nodesByKind(graph, "clip").length, 4);
+  assert.equal(new Set(nodesByKind(graph, "clip").map((clip) => clip.props.assetId)).has(video.id), true);
+});
+
+test("ripple trim end shifts downstream edits with the changed boundary", () => {
+  let graph = projectWithTimeline(3, 6);
+  const clips = nodesByKind(graph, "clip").sort((a, b) => a.props.start - b.props.start);
+  graph = applyOperations(graph, rippleTrimEndOperations(graph, clips[0].id, 4));
+  const updated = nodesByKind(graph, "clip").sort((a, b) => a.props.start - b.props.start);
+  assert.deepEqual(updated.map((clip) => clip.props.start), [0, 4, 10]);
+  assert.equal(updated[0].props.duration, 4);
 });

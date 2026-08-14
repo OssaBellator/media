@@ -15,70 +15,86 @@
 - metadata probing
 - move/trim/split/ripple delete
 - transactional validation
-- relinkable media identity foundation
+- relinkable source identity foundation
 
 ## Milestone 0.3 — creative engine foundation ✅
 
 - semantic project invariants
 - atomic preflight diagnostics
-- snapping and ripple insert
-- slip + playback-rate semantics
+- snapping, ripple insert, slip and playback-rate semantics
 - multi-track mute/lock state
-- frame-accurate transport state
-- draggable timeline editing
-- Canvas layers/transforms/dragging
-- Motion keyframes and easing
-- nondestructive effect stacks
-- composition evaluation/render plans
-- audio waveform extraction
-- sampled source fingerprints
-- source relinking
-- planner-provider registry/validation
-- WebGPU compositor bootstrap with fallback
+- frame transport
+- Canvas transforms
+- Motion keyframes/easing
+- nondestructive effects
+- composition evaluation
+- waveforms/fingerprints/relink
+- provider registry
+- WebGPU bootstrap
 
-## Milestone 0.4 — decode/render pipeline
+## Milestone 0.4 — render/audio/deliver foundation ✅
 
-Highest priority next work:
+- weighted decoded-media LRU cache
+- priority/deduplicating decode scheduler
+- browser frame provider
+- formal source manifest + project-file v2 migration
+- hash-indexed local relinking
+- derived-artifact persistence store
+- audio gain/pan/fade semantics
+- sample/time audio mix planning
+- AudioContext multi-clip preview mixer
+- duplicate, roll edit, blade-all and ripple trim
+- first-class text layers
+- first-class vector rectangle/ellipse layers
+- Deliver output graph nodes/presets
+- deterministic render manifests/signatures
+- Canvas2D still rendering from composition plans
+- sanitized HTTP planner-provider adapter
 
-- worker architecture and media task scheduler
+## Milestone 0.5 — production decode/render pipeline
+
+Highest-priority next work:
+
 - MP4/MOV/WebM demux
-- WebCodecs decode queues
-- decoded frame cache and memory budgets
-- proxy/thumbnail derived-media store
-- WebGPU texture compositor and shader effect kernels
-- sample-accurate audio transport/mixer
-- timeline trim handles and cross-track dragging
-- project package/relink search workflow
-- deterministic preview/render parity tests
+- WebCodecs video/audio decode queues
+- worker decode/prefetch architecture
+- proxy/thumbnail generation and derived-cache eviction
+- GPU texture cache
+- WebGPU layer compositor + shader effects
+- trim handles and cross-track drag/drop
+- offline audio render/automation
+- encoded video/audio mux/export
+- project package/media-copy workflow
+- deterministic preview-vs-export parity fixtures
 
-## Milestone 0.5 — professional editing
+## Milestone 0.6 — professional editing
 
-- multicam model
-- compound/nested compositions
+- nested/compound compositions
 - transitions
 - masks and tracked masks
 - color-management pipeline
-- richer audio effects/automation
+- richer audio effects and buses
 - captions/transcripts
 - keyframe graph editor
-- scopes and meters
+- scopes/meters
+- multicam model
 
-## Milestone 0.6 — collaboration + agent
+## Milestone 0.7 — collaboration + agent
 
 - operation log / stable author IDs
-- branches and merge semantics
+- branches/merge semantics
 - multiplayer collaboration
 - review comments
-- model-backed provider adapters
-- permission/cost boundaries for model calls
-- evaluation harness for agent edit quality
+- production model provider adapters
+- permission/cost boundaries
+- agent edit-quality evaluation harness
 
 ## Long-term
 
-- native/WASM codec/effect kernels
+- native/WASM codecs and heavy effects
 - 3D/scene workspace
 - MIDI/music composition
-- render farm / cloud execution
+- distributed render execution
 - plugin SDK
-- open project interchange
-- responsive multi-output Deliver workspace
+- open interchange bridges
+- responsive multi-output campaign automation

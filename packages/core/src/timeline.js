@@ -176,3 +176,68 @@ export function findTimelineOverlaps(graph, trackId) {
   }
   return overlaps;
 }
+
+export function duplicateClipOperations(graph, clipId, { start, trackId } = {}) {
+  const clip = clipFromGraph(graph, clipId);
+  const targetTrackId = trackId ?? clip.props.trackId;
+  assertCompatibleTrack(graph, clip, targetTrackId);
+  const asset = graph.nodes[clip.props.assetId];
+  const duplicateStart = start === undefined ? clipEnd(clip) : Math.max(0, number(start, "Duplicate start"));
+  const { clip: duplicate, edges } = createClipForAsset(graph, asset, duplicateStart, targetTrackId);
+  duplicate.name = `${clip.name} copy`;
+  duplicate.props = { ...duplicate.props, ...structuredClone(clip.props), start: duplicateStart, trackId: targetTrackId };
+  return [{ type: "node.add", node: duplicate }, ...edges.map((edge) => ({ type: "edge.add", edge }))];
+}
+
+export function rollEditOperations(graph, leftClipId, rightClipId, time) {
+  const left = clipFromGraph(graph, leftClipId);
+  const right = clipFromGraph(graph, rightClipId);
+  if (left.props.trackId !== right.props.trackId) throw new Error("Roll edit clips must be on the same track");
+  assertCompatibleTrack(graph, left, left.props.trackId);
+  const leftStart = Number(left.props.start ?? 0);
+  const rightEnd = clipEnd(right);
+  const boundary = number(time, "Roll edit time");
+  if (Math.abs(clipEnd(left) - Number(right.props.start ?? 0)) > EPSILON) throw new Error("Roll edit clips must be adjacent");
+  if (boundary <= leftStart + EPSILON || boundary >= rightEnd - EPSILON) throw new Error("Roll edit boundary must remain inside the combined clips");
+  const leftRate = Number(left.props.playbackRate ?? 1);
+  const rightRate = Number(right.props.playbackRate ?? 1);
+  const oldRightStart = Number(right.props.start ?? 0);
+  const rightInPoint = Number(right.props.inPoint ?? 0) + (boundary - oldRightStart) * rightRate;
+  if (rightInPoint < -EPSILON) throw new Error("Roll edit exceeds right source media");
+  const leftDuration = boundary - leftStart;
+  const rightDuration = rightEnd - boundary;
+  const leftAsset = graph.nodes[left.props.assetId];
+  const rightAsset = graph.nodes[right.props.assetId];
+  const leftSourceEnd = Number(left.props.inPoint ?? 0) + leftDuration * leftRate;
+  if (Number.isFinite(Number(leftAsset?.props.duration)) && leftAsset.props.mediaKind !== "image" && leftSourceEnd > Number(leftAsset.props.duration) + EPSILON) throw new Error("Roll edit exceeds left source media");
+  if (Number.isFinite(Number(rightAsset?.props.duration)) && rightAsset.props.mediaKind !== "image" && rightInPoint + rightDuration * rightRate > Number(rightAsset.props.duration) + EPSILON) throw new Error("Roll edit exceeds right source media");
+  return [
+    { type: "node.update", nodeId: left.id, patch: { props: { duration: leftDuration } } },
+    { type: "node.update", nodeId: right.id, patch: { props: { start: boundary, duration: rightDuration, inPoint: rightInPoint } } },
+  ];
+}
+
+export function bladeAllAtTimeOperations(graph, time) {
+  const target = number(time, "Blade time");
+  const operations = [];
+  for (const clip of nodesByKind(graph, "clip")) {
+    const track = graph.nodes[clip.props.trackId];
+    if (track?.props.locked) continue;
+    if (target > Number(clip.props.start ?? 0) + EPSILON && target < clipEnd(clip) - EPSILON) operations.push(...splitClipOperations(graph, clip.id, target));
+  }
+  return operations;
+}
+
+export function rippleTrimEndOperations(graph, clipId, time) {
+  const clip = clipFromGraph(graph, clipId);
+  assertCompatibleTrack(graph, clip, clip.props.trackId);
+  const oldEnd = clipEnd(clip);
+  const target = number(time, "Ripple trim time");
+  const trim = trimClipOperations(graph, clipId, { edge: "end", time: target });
+  const delta = target - oldEnd;
+  const later = clipsOnTrack(graph, clip.props.trackId).filter((candidate) => candidate.id !== clip.id && Number(candidate.props.start ?? 0) >= oldEnd - EPSILON);
+  return [
+    ...trim,
+    ...later.map((candidate) => ({ type: "node.update", nodeId: candidate.id, patch: { props: { start: Math.max(target, Number(candidate.props.start ?? 0) + delta) } } })),
+  ];
+}

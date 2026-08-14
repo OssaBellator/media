@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   PlannerRegistry,
+  createHttpPlannerProvider,
   createLocalPlannerProvider,
   createMediaProject,
   createPlannerProvider,
+  createPlannerSnapshot,
   createTransport,
   frameForTime,
   pauseTransport,
@@ -57,4 +59,32 @@ test("planner registry keeps providers replaceable and discoverable", () => {
   assert.equal(registry.get("mock").label, "Mock model");
   assert.equal(registry.unregister("mock"), true);
   assert.equal(registry.get("mock"), null);
+});
+
+test("planner snapshots omit local URIs and heavyweight waveform samples", () => {
+  const graph = createMediaProject("Snapshot");
+  graph.nodes.asset_demo = { id: "asset_demo", kind: "asset", name: "demo.wav", createdAt: "x", updatedAt: "x", props: { mediaKind: "audio", uri: "blob:secret", waveform: [0.1, 0.2], hash: "abc" } };
+  const snapshot = createPlannerSnapshot(graph);
+  assert.equal(snapshot.nodes.asset_demo.props.uri, undefined);
+  assert.equal(snapshot.nodes.asset_demo.props.waveform, undefined);
+  assert.equal(snapshot.nodes.asset_demo.props.hash, "abc");
+});
+
+test("HTTP planner posts a sanitized project snapshot and validates returned operations", async () => {
+  let request;
+  const provider = createHttpPlannerProvider({ endpoint: "https://planner.example/v1/plan", fetchImpl: async (url, options) => {
+    request = { url, options, body: JSON.parse(options.body) };
+    return { ok: true, status: 200, json: async () => ({ summary: "rename", operations: [{ type: "node.update", nodeId: request.body.graph.projectId, patch: { name: "Remote" } }] }) };
+  } });
+  const graph = createMediaProject("Local");
+  const result = await planWithProvider(provider, graph, "rename it", { workspace: "agent" });
+  assert.equal(request.url, "https://planner.example/v1/plan");
+  assert.equal(request.body.version, 1);
+  assert.equal(request.body.context.workspace, "agent");
+  assert.equal(result.operations[0].type, "node.update");
+});
+
+test("HTTP planner rejects non-success responses", async () => {
+  const provider = createHttpPlannerProvider({ endpoint: "https://planner.example/v1/plan", fetchImpl: async () => ({ ok: false, status: 429 }) });
+  await assert.rejects(() => planWithProvider(provider, createMediaProject(), "edit"), /HTTP 429/);
 });

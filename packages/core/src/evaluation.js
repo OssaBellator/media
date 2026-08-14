@@ -30,7 +30,33 @@ export function evaluateComposition(graph, { compositionId, time = 0 } = {}) {
   const canvasLayers = childrenOf(graph, composition.id, "layer")
     .filter((layer) => layer.props.role !== "marker" && enabled(layer))
     .sort((a, b) => Number(a.props.order ?? 0) - Number(b.props.order ?? 0))
-    .map((layer) => ({
+    .map((layer) => layer.props.role === "shape" ? ({
+      kind: "shape",
+      nodeId: layer.id,
+      shape: {
+        type: layer.props.shapeType ?? "rectangle", width: Number(layer.props.width ?? 500), height: Number(layer.props.height ?? 300),
+        fill: layer.props.fill ?? "#ffffff", stroke: layer.props.stroke ?? "transparent", strokeWidth: Number(layer.props.strokeWidth ?? 0), cornerRadius: Number(layer.props.cornerRadius ?? 0),
+      },
+      transform: evaluateAnimatedTransform(layer, time),
+      effects: evaluatedEffects(graph, layer.id),
+      blendMode: layer.props.blendMode ?? "normal",
+    }) : layer.props.role === "text" ? ({
+      kind: "text",
+      nodeId: layer.id,
+      text: layer.props.text ?? "",
+      style: {
+        fontFamily: layer.props.fontFamily ?? "sans-serif",
+        fontSize: Number(layer.props.fontSize ?? 96),
+        fontWeight: Number(layer.props.fontWeight ?? 700),
+        color: layer.props.color ?? "#ffffff",
+        align: layer.props.align ?? "center",
+        lineHeight: Number(layer.props.lineHeight ?? 1.1),
+        letterSpacing: Number(layer.props.letterSpacing ?? 0),
+      },
+      transform: evaluateAnimatedTransform(layer, time),
+      effects: evaluatedEffects(graph, layer.id),
+      blendMode: layer.props.blendMode ?? "normal",
+    }) : ({
       kind: "layer",
       nodeId: layer.id,
       assetId: layer.props.assetId,

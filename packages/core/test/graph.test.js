@@ -64,8 +64,9 @@ test("serializes project files in a versioned envelope", () => {
   const serialized = serializeProject(graph, { appVersion: "0.3.0" });
   const file = JSON.parse(serialized);
   assert.equal(file.format, "ossa.media-project");
-  assert.equal(file.fileVersion, 1);
+  assert.equal(file.fileVersion, 2);
   assert.equal(file.metadata.appVersion, "0.3.0");
+  assert.deepEqual(file.sources, []);
   assert.deepEqual(deserializeProject(serialized), graph);
 });
 
@@ -74,6 +75,14 @@ test("migrates legacy bare-graph project files", () => {
   const parsed = parseProjectFile(JSON.stringify(graph));
   assert.equal(parsed.migratedFrom, "legacy-bare-graph");
   assert.deepEqual(parsed.graph, graph);
+});
+
+test("migrates v1 project envelopes and promotes their asset metadata to sources", () => {
+  let graph = createMediaProject("V1");
+  graph = addAsset(graph, createAsset({ name: "clip.mp4", mimeType: "video/mp4", size: 10, hash: "abc" }));
+  const parsed = parseProjectFile(JSON.stringify({ format: "ossa.media-project", fileVersion: 1, metadata: { assets: [{ id: nodesByKind(graph, "asset")[0].id, name: "clip.mp4", mediaKind: "video", mimeType: "video/mp4", size: 10, hash: "abc" }] }, graph }));
+  assert.equal(parsed.migratedFrom, "project-file-v1");
+  assert.equal(parsed.sources[0].hash, "abc");
 });
 
 test("rejects project files from newer unsupported versions", () => {
