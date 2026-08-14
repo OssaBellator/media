@@ -2,99 +2,78 @@
 
 ## Purpose
 
-The kernel boundary turns container bytes and render intent into deterministic media work without coupling creative semantics to browser APIs. The same protocol can be fulfilled inline, by browser Workers, by a future native process or by remote render workers.
+The kernel boundary turns container bytes and creative render intent into deterministic media work without coupling project semantics to browser APIs. The same protocol can run inline, in browser Workers, in a future native process or on remote render workers.
 
 ## Protocol and scheduling
 
-`media.kernel.v1` defines task, progress, result, error and cancellation messages. The core `KernelRuntime` owns handlers and abort semantics. The Studio adds:
-
-- inline and Worker clients;
-- transfer-safe task construction for zero-copy ArrayBuffer posting;
-- recursive transferable collection for result messages;
-- a bounded priority Worker pool;
-- keyed in-flight/queued deduplication;
-- cancellation and idle synchronization;
-- playhead-driven prefetch windows based on the core seek index.
+`media.kernel.v1` defines task, progress, result, error and cancellation messages. Studio provides inline/Worker clients, transfer-safe ArrayBuffer posting, recursive transferable discovery, a bounded priority Worker pool, keyed deduplication, cancellation, idle synchronization and playhead-driven prefetch.
 
 ## Containers
 
-### WAV — implemented decode and encode
+### WAV
 
-The core parses RIFF/WAVE chunks and decodes PCM 8/16/24/32-bit plus IEEE float 32/64-bit input into planar Float32 PCM. It also writes RIFF/WAVE output for integer PCM 8/16/24/32-bit and float32.
+RIFF/WAVE parse/decode and PCM/float encode are implemented.
 
-### MP4/MOV — sample demux implemented for common paths
+### MP4/MOV
 
-The ISO-BMFF parser now covers the classic non-fragmented sample-table path:
+Common classic sample-table demux and common fragmented-MP4 indexing are implemented. 0.7 adds the reverse direction:
 
-- track/media headers and handler types;
-- `stsd` sample descriptions;
-- `stts` decode timing;
-- `ctts` composition offsets;
-- `stsc` sample-to-chunk mapping;
-- `stsz` and compact `stz2` sample sizes;
-- `stco` / `co64` chunk offsets;
-- `stss` sync samples;
-- AVC `avcC` decoder descriptions / codec strings;
-- AAC `esds` AudioSpecificConfig extraction.
+- classic fast-start AVC/AAC MP4/MOV writing;
+- `edts/elst` parse/application for simple 1× edits;
+- leading-empty-edit generation when muxed tracks start after movie zero;
+- long-duration version-1 `mdhd` output;
+- fMP4 initialization plus `moof/mdat` media-segment writing.
 
-The same demuxer also indexes common fragmented MP4 using `mvex/trex` defaults and `moof/traf/tfhd/tfdt/trun` sample records. Both paths resolve normalized encoded chunks containing byte offset/length, decode and presentation timestamps, duration, sequence and keyframe status.
+The MP4 writer remains intentionally scoped: AVC + AAC are the common supported output codecs, it is in-memory, and advanced metadata/color/subtitle/sample-group features remain future work.
 
-Remaining MP4 work includes edit-list application, broader codec configuration parsing, more fragmented-base-offset conformance cases and an actual MP4 writer.
+### WebM
 
-### WebM — track and block demux implemented
-
-The EBML/WebM parser covers:
-
-- EBML and unknown-size Segment parsing;
-- Info timecode scale/duration;
-- Tracks and CodecPrivate;
-- video/audio metadata;
-- Cluster timecodes;
-- SimpleBlock and BlockGroup;
-- ReferenceBlock keyframe semantics;
-- fixed, Xiph and EBML lacing;
-- Cues/seek points;
-- source byte ranges for every demuxed frame.
-
-The WebM writer currently emits EBML/Segment/Info/Tracks, Clusters, SimpleBlocks and keyframe Cues for WebM-native VP8/VP9/AV1 + Opus/Vorbis tracks. It is currently an in-memory writer, not a streaming muxer.
+WebM track/block/lacing/Cue demux and VP8/VP9/AV1 + Opus/Vorbis mux are implemented. The writer is currently in-memory rather than a streaming sink.
 
 ## WebCodecs boundary
 
-Browser adapters now convert normalized demux descriptors into `EncodedVideoChunk` / `EncodedAudioChunk`, configure the corresponding WebCodecs decoder and collect output frames. Encoder adapters perform the inverse operation: VideoFrame/AudioData input becomes copied encoded sample records suitable for the mux plan/writer layer.
+Browser adapters convert normalized encoded chunk descriptors to `EncodedVideoChunk` / `EncodedAudioChunk`, decode them, and perform the reverse with `VideoEncoder` / `AudioEncoder`. `createMuxPlanFromEncoded` now preserves decoder configuration metadata directly into the mux layer.
 
-This preserves the core contract when WebCodecs is unavailable: another decoder/encoder implementation can fulfill the same track/chunk interfaces.
+## Seeking
 
-## Seeking and prefetch
+Keyframe-safe seek indexes remain decoder-independent. 0.7 fixes an exact-boundary overlap bug: a chunk ending exactly at `decodeStart` is no longer treated as overlapping the decode window.
 
-Demuxers produce keyframe-aware chunks. `createSeekIndex` and the Worker-pool prefetch controller derive a safe preceding keyframe and directional decode horizon. Decoder choice is not embedded in seek semantics.
+## Derived media
+
+Thumbnail and proxy tasks now have executable browser implementations.
+
+### Thumbnail
+
+Seek → small decode window → nearest decoded frame → Canvas resize → image Blob.
+
+### Proxy
+
+Demuxed chunks → WebCodecs decode → resize → VP9/AV1 encode → optional Opus audio → WebM mux.
+
+The initial proxy path is batch-oriented with explicit retained-frame caps. Large media should be partitioned into smaller proxy jobs until streaming decoder→encoder handoff is implemented.
 
 ## Offline audio
 
-Float32 PCM primitives provide linear resampling, gain, constant-power pan, fades, normalization and mix-plan rendering. WAV output closes one deterministic offline-audio export path; compressed audio encoding can use WebCodecs where supported.
+Float32 PCM resampling, gain, pan, fades, normalization and mix-plan rendering remain deterministic core operations. WAV closes a lossless/uncompressed output path; compressed audio can use WebCodecs where supported.
 
-## Proxies and derived media
-
-Derivative plans produce stable keys from source identity plus derivative specification. The existing derived-artifact IndexedDB store remains the persistence target. Actual proxy/thumbnail generation should now be implemented as kernel tasks using demux + WebCodecs + render/encode primitives rather than HTML media elements.
-
-## Render jobs and production DAG
-
-Render manifests partition into resumable frame chunks with retries, interruption recovery and ordered artifact manifests. `createProductionPipeline` models source verification, optional derivatives, frame/audio render, encode and mux dependencies.
+## Production DAG
 
 ```text
 source bytes
    ├─> demux -> seek/prefetch -> decode -> preview/render
-   ├─> derivative/proxy pipeline
+   ├─> thumbnail/proxy derived jobs
    └─> render -> encode -> mux -> Deliver artifact
 ```
 
+Render manifests remain partitionable into resumable frame jobs with retries and interruption recovery.
+
 ## Next kernel work
 
-1. MP4 binary mux writer and fragmented-MP4 writer;
-2. MP4 edit lists and broader codec/sample-entry configuration coverage;
-3. WebM streaming writer and richer cue/seek metadata;
-4. real proxy/thumbnail generation into derived storage;
-5. Worker-pool integration into Studio playback rather than standalone adapter coverage;
-6. WebGPU texture caches and shader effect kernels;
-7. offline audio automation curves and loudness analysis;
-8. broader codec fallback strategy with WASM/native adapters;
-9. large real-world fixture/conformance corpus for container edge cases.
+1. streaming MP4/WebM writers and resumable output sinks;
+2. HEVC/AV1 MP4 output configuration and broader sample entries;
+3. Studio playback driven by the Worker pool instead of HTML-media fallback;
+4. segmented/resumable proxy generation persisted into derived storage;
+5. WebGPU texture caches and shader effect kernels;
+6. offline audio automation and loudness analysis;
+7. WASM/native codec fallbacks;
+8. a large real-world camera/browser/container conformance corpus.

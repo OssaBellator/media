@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.7.0
+
+- Added an in-memory classic fast-start MP4/MOV writer for AVC + AAC.
+- Added fragmented-MP4 init/media writers using `mvex/trex`, `tfhd`, `tfdt` and `trun`.
+- Added `edts/elst` v0/v1 parsing and simple 1× edit-list application during MP4 demux.
+- Added leading-empty-edit emission when classic mux tracks begin after movie time zero.
+- Added version-1 `mdhd` output for long-form tracks that exceed 32-bit microsecond duration.
+- Added direct WebCodecs encoder-result → mux-plan bridging with decoder-description preservation.
+- Added executable thumbnail generation through keyframe-safe WebCodecs decode + canvas encoding.
+- Added executable WebM proxy transcoding with resize, VP9/AV1 video, optional Opus audio and explicit batch-memory caps.
+- Added real kernel `thumbnail`, `proxy`, MP4/MOV `mux` and fMP4 mux dispatch paths.
+- Fixed seek-window overlap so a chunk ending exactly at a keyframe boundary is not included before that keyframe.
+- Added 25 focused local 0.7 regression tests across muxing, edit lists, derivatives and export bridging.
+
 ## 0.6.0
 
 - Added classic MP4/MOV sample-table demux for `stsd`, `stts`, `ctts`, `stsc`, `stsz`/`stz2`, `stco`/`co64` and `stss`.
@@ -10,41 +24,19 @@
 - Added browser WebCodecs video/audio decode and encode adapters.
 - Added priority Worker-pool scheduling, keyed task deduplication, cancellation and playhead prefetch planning.
 - Fixed the kernel transfer boundary so Worker payload ArrayBuffers can be posted zero-copy without cloning away the transferred object.
-- Added a recursive transferable collector for ArrayBuffers and browser media objects.
-- Added an actual in-memory WebM writer for VP8/VP9/AV1 + Opus/Vorbis with keyframe Cues.
-- Added end-to-end WebM mux → demux round-trip coverage.
-- Added 33 focused local 0.6 regression tests across demux, codec adapters, workers and writers.
+- Added an in-memory WebM writer for VP8/VP9/AV1 + Opus/Vorbis with keyframe Cues.
 
 ## 0.5.0
 
-- Added a versioned media-kernel task protocol and cancellable handler runtime.
-- Added Worker and inline browser kernel clients with transferable-result support.
-- Added real RIFF/WAVE parsing and PCM/float WAV decoding.
-- Added ISO-BMFF top-level box, `ftyp` and `mvhd` parsing foundations for MP4/MOV inspection.
-- Added EBML variable-integer/element parsing and WebM DocType inspection.
-- Added encoded-chunk descriptors, demux plans, decoder configs and keyframe-safe seek/prefetch indexes.
-- Added mux track/sample plans, timestamp interleaving, keyframe-aligned segmentation and byte estimates.
-- Added offline Float32 PCM resampling, gain/pan/fade mixing and normalization primitives.
-- Added deterministic proxy/thumbnail/waveform derivative planning and cache keys.
-- Added resumable frame-chunk render jobs with retry, interruption recovery and artifact manifests.
-- Added a production pipeline DAG spanning source verification, derivatives, frame render, audio render, encode and mux stages.
-- Added 82 new local delta tests covering the kernel/core and browser adapters.
+- Added the versioned media-kernel protocol/runtime, WAV decode, structural MP4/WebM parsing, encoded chunk/seek models, offline PCM primitives, derivative planning, resumable render jobs and the production pipeline DAG.
 
 ## 0.4.0
 
-- Added weighted decoded-frame cache and priority/deduplicating decode scheduler.
-- Added audio gain/pan/fade semantics, mix planning and browser AudioContext preview mixing.
-- Added Deliver output nodes, presets, deterministic render manifests and still-frame rendering.
-- Added project-file v2 with formal source manifests and v1 migration.
-- Added hash-indexed source relinking and derived-artifact IndexedDB storage.
-- Added duplicate, roll, blade-all and ripple-trim timeline operations.
-- Added sanitized HTTP planner-provider adapter.
-- Added first-class editable text and native rectangle/ellipse layers.
-- Expanded local test coverage to 69 tests.
+- Added decoded-frame cache/scheduler, audio clip semantics, Deliver output nodes/manifests, project-file v2, derived storage and native text/vector layers.
 
 ## 0.3.0
 
-- Added semantic project invariants, Canvas transforms, Motion keyframes/effects, advanced timeline semantics, frame transport, source fingerprints/relinking and planner-provider contracts.
+- Added semantic invariants, Canvas transforms, Motion keyframes/effects, advanced timeline semantics, frame transport, source fingerprints/relinking and planner-provider contracts.
 
 ## 0.2.0
 

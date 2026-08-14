@@ -2,49 +2,45 @@
 
 Media is an experimental unified creative workstation for image, video, audio, animation and emerging media.
 
-The architectural thesis is simple: **the creative project is the product, not a collection of application-specific files**. Canvas, Cut, Motion, Deliver and Agent are views over the same Universal Creative Graph, shared source media and reversible edit history.
+The architectural thesis is simple: **the creative project is the product, not a collection of application-specific files**. Canvas, Cut, Motion, Deliver and Agent are views over the same Universal Creative Graph, shared source media, reversible history and one media-kernel contract.
 
-## Current milestone — 0.6
+## Current milestone — 0.7
 
-0.6 moves the production kernel from structural container inspection to usable byte-range demux, browser codec adapters and real output writers.
+0.7 closes the first practical browser export/derivative loops on top of the 0.6 demux + WebCodecs kernel.
 
-### Creative/editor layer
+### Editor foundation
 
-The 0.4/0.5 editor foundation remains: Universal Creative Graph, Canvas, multi-track Cut, Motion keyframes/effects, audio editing, Deliver render manifests/stills, Agent provider boundaries, IndexedDB media/derived storage and resumable render jobs.
+The existing creative layer remains intact: Universal Creative Graph, Canvas, multi-track Cut, Motion keyframes/effects, audio editing, Deliver manifests/stills, Agent provider boundaries, IndexedDB projects/media/derived artifacts and resumable render jobs.
 
-### Native demux paths
+### Container and export paths
 
-- classic non-fragmented MP4/MOV sample tables: `stsd`, `stts`, `ctts`, `stsc`, `stsz`/`stz2`, `stco`/`co64`, `stss`;
-- common fragmented MP4: `trex`, `tfhd`, `tfdt`, `trun` with byte-range/sample timing indexes;
-- H.264 `avcC` decoder descriptions and RFC6381-style AVC codec strings;
-- AAC `esds` AudioSpecificConfig extraction for WebCodecs decoder configuration;
-- WebM Segment/Info/Tracks/Cluster/Cues parsing;
-- SimpleBlock and BlockGroup extraction;
-- no/fixed/Xiph/EBML lacing support;
-- normalized encoded chunk descriptors with source byte offsets, DTS/PTS and keyframe state.
+- classic fast-start MP4/MOV writer for AVC (`avc1`/`avc3`) + AAC (`mp4a.40.*`);
+- `stsd`, `stts`, signed/unsigned `ctts`, `stsc`, `stsz`, `stco`/`co64`, `stss`, `avcC` and `esds` output;
+- leading non-zero classic track time is represented with `edts/elst` rather than silently discarded;
+- long media durations promote `mdhd` to version 1 when 32-bit microsecond duration is insufficient;
+- fragmented MP4 init output with `mvex/trex` plus `moof/traf/tfhd/tfdt/trun` media segments;
+- existing WebM VP8/VP9/AV1 + Opus/Vorbis writer and WAV PCM/float writer;
+- WebCodecs encoder results can be converted directly into mux plans while preserving decoder descriptions.
 
-### Decode / encode runtime
+### Import timing
 
-- WebCodecs video and audio decoder adapters consuming demuxed chunk descriptors;
-- WebCodecs video/audio encoder adapters producing mux-ready copied encoded chunks;
-- transferable-safe Worker kernel tasks instead of cloning away the posted buffers;
-- bounded priority Worker pool with keyed deduplication, cancellation and idle tracking;
-- playhead-oriented keyframe-safe prefetch controller;
-- runtime capability/support checks so unsupported codecs fail explicitly rather than silently falling back.
+- MP4 `elst` v0/v1 parsing;
+- leading empty edits and 1× trim/remap semantics;
+- simple edit lists are applied to demuxed chunk timing;
+- unsupported rate-changing edits remain visible in demux metadata instead of making the source unreadable.
 
-### Output paths
+### Derived media
 
-- actual PCM/IEEE-float WAV writer, including 8/16/24/32-bit PCM and float32 output;
-- in-memory WebM writer for VP8/VP9/AV1 video plus Opus/Vorbis audio;
-- WebM clusters, SimpleBlocks and keyframe Cues;
-- generated WebM files round-trip through Media's own WebM demuxer in local tests;
-- existing semantic mux plans remain the boundary for future MP4 and streaming writers.
+- keyframe-safe thumbnail decode from normalized chunk indexes;
+- OffscreenCanvas/Canvas2D thumbnail encoding to WebP/PNG/etc.;
+- executable WebM proxy transcode: demuxed chunks → WebCodecs decode → resize → WebCodecs encode → Media WebM mux;
+- optional audio transcode to Opus for editorial proxies;
+- explicit decoded-frame caps so large sources must be segmented instead of retaining unbounded `VideoFrame`/`AudioData` batches;
+- kernel `thumbnail` and `proxy` tasks now have real runtime implementations.
 
-### Deliberate boundary
+### Scheduling correctness
 
-0.6 still does **not** claim a complete professional container stack. MP4 edit lists are not applied yet, unusual fragmented-MP4 base-offset inheritance needs broader conformance fixtures, HEVC/AV1 codec configuration coverage can be deeper, and an actual MP4 binary mux writer is still outstanding. The current WebM writer is in-memory rather than streaming.
-
-Those are now implementation gaps above a working demux/decode/encode contract rather than missing architecture.
+A decode-window boundary bug was fixed: a chunk whose end time equals the selected keyframe is no longer included before that keyframe. This prevents unnecessary pre-keyframe delta data from entering decode windows.
 
 ## Run locally
 
@@ -81,9 +77,9 @@ In Cut or Motion:
 
 - `Space` — play/pause
 - `Left` / `Right` — previous/next frame
-- `M` — add a marker at the playhead
+- `M` — marker at playhead
 - `S` — split selected clip at playhead
-- `B` — blade all unlocked clips intersecting the playhead
+- `B` — blade unlocked clips at playhead
 - `Cmd/Ctrl+Z` — undo
 - `Cmd/Ctrl+Shift+Z` — redo
 
@@ -92,14 +88,14 @@ In Cut or Motion:
 ```text
 apps/studio/             Browser Studio and browser/runtime/kernel adapters
 apps/studio/test/        Runtime-module tests runnable in Node
-packages/core/src/       Creative semantics plus media-kernel contracts/parsers/writers
+packages/core/src/       Creative semantics + container/kernel/export primitives
 packages/core/test/      Core unit/integration tests
 scripts/                 Dependency-free dev/build/check tooling
-docs/                    Architecture, engine/kernel contracts, project format, roadmap
+docs/                    Architecture, engine/kernel/export contracts and roadmap
 ```
 
 ## Engineering principle
 
-The UI is not the source of truth. Mouse gestures, keyboard shortcuts, agent plans, future plugins, collaboration and native frontends should converge on the same operation/evaluation/kernel contracts.
+The UI is not the source of truth. Mouse gestures, keyboard shortcuts, agent plans, collaboration, derived-media workers and future native frontends should converge on the same operation/evaluation/kernel contracts.
 
-See `docs/ARCHITECTURE.md`, `docs/ENGINE.md`, `docs/KERNEL.md`, `docs/PROJECT_FORMAT.md`, `docs/DECISIONS.md` and `docs/ROADMAP.md`.
+See `docs/ARCHITECTURE.md`, `docs/ENGINE.md`, `docs/KERNEL.md`, `docs/EXPORT.md`, `docs/PROJECT_FORMAT.md`, `docs/DECISIONS.md` and `docs/ROADMAP.md`.
