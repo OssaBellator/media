@@ -1,4 +1,5 @@
 import { GpuGraphCompositor, gpuGraphSupport } from './gpu-graph-compositor.js';
+import { createBrowserDisplayProfile } from './display-profile.js';
 
 export class BrowserGpuCompositionRenderer {
   constructor({navigatorObject=globalThis.navigator,maxCacheBytes=256*1024*1024,workingFormat='rgba16float',toneMap=null}={}){this.navigator=navigatorObject;this.maxCacheBytes=maxCacheBytes;this.workingFormat=workingFormat;this.toneMap=toneMap;this.adapter=null;this.device=null;this.format=null;this.targets=new WeakMap();this.targetSet=new Set();this.available=Boolean(navigatorObject?.gpu);}
@@ -8,3 +9,4 @@ export class BrowserGpuCompositionRenderer {
   async present(canvas,plan,{assetResolver,frameProvider,priority=100,signal,shouldCommit}={}){const support=gpuGraphSupport(plan);if(!this.available||!support.supported)throw new Error(`GPU composition unsupported: ${support.reason}`);const target=await this.targetFor(canvas);const layers=await target.compositor.resolve(plan,{assetResolver,frameProvider,priority,signal});if(shouldCommit&&shouldCommit()===false)return{stale:true,backend:'webgpu-graph',layersResolved:layers.length};const encoder=this.device.createCommandEncoder();const result=target.compositor.renderResolved(encoder,target.context.getCurrentTexture().createView(),plan,layers);this.device.queue.submit([encoder.finish()]);return{...result,canvas,layersResolved:layers.length};}
   clear(){for(const target of this.targetSet){target.compositor.clear?.();try{target.context.unconfigure?.();}catch{}}this.targetSet.clear();this.targets=new WeakMap();}
 }
+export function createPolicyGpuCompositionRenderer(source,{policy={},capabilities=null,environment={},rendererOptions={}}={}){const profile=createBrowserDisplayProfile(source,{policy,capabilities,environment}),renderer=new BrowserGpuCompositionRenderer({...rendererOptions,workingFormat:profile.pipeline.workingFormat,toneMap:profile.pipeline.toneMap});return{profile,renderer};}

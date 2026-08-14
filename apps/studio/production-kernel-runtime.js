@@ -1,5 +1,5 @@
 import { createDefaultKernelRuntime } from './kernel-handlers.js';
-import { createBrowserCodecRouter } from './codec-router.js';
+import { createBrowserCodecRouter, createBrowserCodecRouterWithPlugins } from './codec-router.js';
 
 function bytesFromPayload(payload) {
   const input = payload?.bytes;
@@ -26,5 +26,7 @@ export function createProductionKernelRuntime({codecRouter=createBrowserCodecRou
   });
   runtime.register('encode-video',async(payload,{signal,progress})=>{if(!Array.isArray(payload?.frames)||!payload.config)throw new Error('encode-video requires frames and config');const total=Math.max(1,payload.frames.length),records=[];let encoded=0;const routed=await codecRouter.run('encode-video',{frames:payload.frames,config:payload.config,options:{trackId:payload.trackId??'video:encoded',maxQueue:payload.maxQueue??8,keyFrameInterval:payload.keyFrameInterval??60,onChunk:(record)=>{records.push(record);encoded++;progress(Math.min(.99,encoded/total),'encode');}}},{signal,context:{taskKind:'encode-video'}});progress(1,{stage:'flush',backendId:routed.backendId});return{...routed.result,chunks:routed.result?.chunks??records,backendId:routed.backendId};});
   runtime.register('encode-audio',async(payload,{signal,progress})=>{if(!(Array.isArray(payload?.frames)&&payload.config))return fallbackEncodeAudio(payload,{signal,progress});const total=Math.max(1,payload.frames.length),records=[];let encoded=0;const routed=await codecRouter.run('encode-audio',{frames:payload.frames,config:payload.config,options:{trackId:payload.trackId??'audio:encoded',maxQueue:payload.maxQueue??16,onChunk:(record)=>{records.push(record);encoded++;progress(Math.min(.99,encoded/total),'encode');}}},{signal,context:{taskKind:'encode-audio'}});progress(1,{stage:'flush',backendId:routed.backendId});return{...routed.result,chunks:routed.result?.chunks??records,backendId:routed.backendId};});
+  runtime.codecRouter=codecRouter;
   return runtime;
 }
+export async function createProductionKernelRuntimeWithPlugins({pluginSpecs=[],pluginLoadOptions={},routerOptions={},...runtimeOptions}={}){const codecRouter=await createBrowserCodecRouterWithPlugins({pluginSpecs,pluginLoadOptions,...routerOptions});return createProductionKernelRuntime({...runtimeOptions,codecRouter});}

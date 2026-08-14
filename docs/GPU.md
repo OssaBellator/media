@@ -15,6 +15,18 @@ The WebGPU reference graph uses destination-sampled composition rather than trea
 - `rgba16float` ping-pong working targets;
 - final output transfer/tone-map pass.
 
+## Display policy
+
+0.12 separates **source HDR metadata**, **working-space choice** and **display capability**. `chooseDisplayPipeline()` selects SDR/HDR mode, working format, output transfer/gamut and tone-map requirements. `detectBrowserDisplayCapabilities()` derives an advisory browser profile from CSS dynamic-range/color-gamut queries; native targets can supply authoritative capabilities.
+
+`createPolicyGpuCompositionRenderer()` applies that policy when constructing the browser compositor.
+
+## Temporal rendering
+
+`compileTemporalGpuRenderGraph()` expands a normal supported graph into weighted subframe passes and a temporal resolve node. The CPU `accumulateTemporalFrames()` implementation is the reference result.
+
+This temporal graph is not yet the default real-time Cut playback path; it is the contract future GPU scheduling should match.
+
 ## HDR ingest
 
 There are two deliberately distinct upload paths:
@@ -24,4 +36,4 @@ There are two deliberately distinct upload paths:
 
 Linear HDR frames carry a declared source peak and cannot be presented by the GPU compositor without an explicit tone-map policy. Core provides PQ/HLG transfer helpers and ACES/Reinhard/Hable/clip reference tone maps.
 
-This is still a reference color pipeline. OS display calibration, ICC/ColorSync/Windows advanced-color integration and guaranteed HDR swap-chain presentation belong in platform backends.
+OS display calibration, ICC/ColorSync/Windows advanced-color integration and guaranteed HDR swap-chain presentation remain platform-backend work.

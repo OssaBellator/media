@@ -1,0 +1,2 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {createBrowserCodecRouter} from '../codec-router.js';
+test('browser codec router registers external plugin backends by priority',()=>{const plugin={id:'plugin',priority:120,capabilities:['decode-video'],decodevideo:async()=>({})},router=createBrowserCodecRouter({scope:{},includeWebCodecs:true,pluginBackends:[plugin]});assert.deepEqual(router.list('decode-video').map(v=>v.id),['plugin','webcodecs']);});

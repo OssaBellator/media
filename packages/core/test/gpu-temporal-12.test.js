@@ -1,0 +1,3 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {compileTemporalGpuRenderGraph} from '../src/gpu-temporal.js';
+const plan={visual:[{assetId:'a',kind:'video',effects:[],blendMode:'normal'}]};
+test('temporal GPU graph expands render graph and resolves weighted samples',()=>{const graph=compileTemporalGpuRenderGraph(plan,{fps:24,time:1,shutterAngle:180,samples:4});assert.equal(graph.supported,true);assert.equal(graph.temporal,true);assert.equal(graph.samples.length,4);assert.equal(graph.nodes.at(-1).kind,'temporal-resolve');assert.ok(graph.nodes.some(n=>n.kind==='temporal-accumulate'));});

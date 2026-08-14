@@ -1,0 +1,2 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {createPolicyGpuCompositionRenderer} from '../gpu-composition-renderer.js';
+test('display policy configures GPU working format and tone mapping',()=>{const {profile,renderer}=createPolicyGpuCompositionRenderer({transfer:'pq',masteringMaxNits:1000},{capabilities:{hdr:false,bitsPerChannel:8},rendererOptions:{navigatorObject:{}}});assert.equal(profile.pipeline.mode,'sdr');assert.equal(renderer.workingFormat,'rgba16float');assert.equal(renderer.toneMap.operator,'aces');});

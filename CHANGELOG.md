@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.12.0
+
+- Added normalized HLS master/media parsing including LL-HLS parts/server-control/preload hints, delta `EXT-X-SKIP`, rendition reports, byte ranges, maps, discontinuities and key metadata.
+- Added DASH `SegmentTemplate`/`SegmentTimeline`, dynamic availability windows, `SegmentList` and `SegmentBase` normalization.
+- Added ISO-BMFF `sidx` parsing plus bounded hierarchical sub-index expansion and DASH range hydration.
+- Added adaptive ABR/session state, retry/backoff, duplicate-delivery suppression, VOD variant switching and an adaptive CMAF bridge.
+- Added explicit unsupported MPEG-TS handling and injected AES-128 HLS segment decryption boundary.
+- Added validated `media.codec.v1` codec plugin modules, trusted-origin browser loading and plugin registration in the codec router.
+- Added normalized display/HDR output policy and a GPU renderer factory driven by that policy.
+- Added temporal shutter/rolling-shutter sampling, temporal GPU graph expansion and CPU accumulation reference kernels.
+- Added signed-distance vector matte reference rasterization with feathered alpha output.
+- Added configurable MP4 chunk/table scale planning plus `npm run stress` for long export/adaptive/matte workloads.
+- Added environment-keyed conformance history and long-run regression budgets via `npm run conformance:history`.
+- Added focused 0.12 regressions across adaptive manifests/sessions, CMAF bridging, codec plugins, display policy, sidx, motion/vector reference kernels and MP4 scale.
+
 ## 0.11.0
 
 - Added append-only range sources with backpressure, wait-for-size, pruning and ReadableStream pumping.

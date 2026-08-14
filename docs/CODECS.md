@@ -2,14 +2,28 @@
 
 `CodecBackendRegistry` separates container/kernel semantics from codec implementations.
 
-Supported operation names:
+Supported operations are `decode-video`, `decode-audio`, `encode-video` and `encode-audio`.
 
-- `decode-video`
-- `decode-audio`
-- `encode-video`
-- `encode-audio`
+The browser router registers WebCodecs and can discover injected native/WASM backend objects. Priorities are configurable. A backend may probe an operation before execution.
 
-The browser router registers WebCodecs and can discover injected native and WASM backend objects. Priorities are configurable. A backend may probe an operation before execution.
+## Plugin ABI
+
+0.12 adds a small external-module ABI:
+
+```js
+export const manifest = {
+  id: 'my-codec',
+  apiVersion: 'media.codec.v1',
+  operations: ['decode-video'],
+  priority: 120,
+};
+```
+
+A module may export operation functions directly or `createBackend(context)`. The returned object uses the same codec operation contract as built-in backends.
+
+Browser plugin loading is explicit. Same-origin/blob modules are allowed by policy; other origins require an explicit trusted specification or allowlist. Media does not discover or execute arbitrary remote codec modules automatically.
+
+`createProductionKernelRuntimeWithPlugins()` is the async production entry point when plugin modules must be loaded before codec tasks begin.
 
 ## Failure and health policy
 

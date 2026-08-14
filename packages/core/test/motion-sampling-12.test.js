@@ -1,0 +1,3 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {createMotionBlurSamples,rollingShutterOffset,temporalBounds} from '../src/motion-sampling.js';
+test('motion blur samples span shutter interval with normalized weights',()=>{const samples=createMotionBlurSamples({time:1,fps:24,shutterAngle:180,samples:5,weightCurve:'triangle'});assert.equal(samples.length,5);assert.ok(Math.abs(samples.reduce((n,s)=>n+s.weight,0)-1)<1e-9);const bounds=temporalBounds(samples);assert.ok(bounds.start<1&&bounds.end>1-.01);});
+test('rolling shutter offset follows readout direction',()=>{assert.equal(rollingShutterOffset(.5,{readoutSeconds:.02,direction:'down'}),.01);assert.equal(rollingShutterOffset(.5,{readoutSeconds:.02,direction:'up'}),-.01);});

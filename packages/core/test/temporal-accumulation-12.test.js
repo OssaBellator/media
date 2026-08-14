@@ -1,0 +1,2 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {accumulateTemporalFrames} from '../src/temporal-accumulation.js';
+test('temporal accumulation produces weighted reference pixels',()=>{const a=new Uint8Array([0,0,0,255]),b=new Uint8Array([100,50,0,255]),out=accumulateTemporalFrames([a,b],[{weight:.25},{weight:.75}],{output:'uint8'});assert.deepEqual([...out],[75,38,0,255]);});
