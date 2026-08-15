@@ -76,6 +76,7 @@ export * from './render-worker-auth.js';
 export * from './render-worker-coordinator.js';
 export * from './render-worker-wire.js';
 export * from './render-worker-http.js';
+export * from './render-worker-client.js';
 export * from './seek-index.js';
 export * from './stream-mux.js';
 export * from './wav.js';
