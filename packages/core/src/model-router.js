@@ -1,10 +1,16 @@
+import { normalizeBoundedModelJsonObject } from './model-input.js';
+
 export const MODEL_OPERATIONS = Object.freeze([
   'plan', 'plan-workflow', 'embed', 'analyze-media', 'generate-image', 'edit-image', 'generate-video', 'edit-video',
   'generate-audio', 'edit-audio', 'transcribe', 'synthesize-speech',
 ]);
 export const MODEL_DATA_POLICIES = Object.freeze(['any', 'trusted', 'local']);
+export const MAX_MODEL_ROUTING_BACKEND_IDS = 256;
+export const MAX_MODEL_ROUTING_BACKEND_ID_CHARS = 160;
+export const MAX_MODEL_ROUTER_OPTIONS_BYTES = 64 * 1024;
 const MODEL_OPERATION_SET = new Set(MODEL_OPERATIONS);
 const MODEL_DATA_POLICY_SET = new Set(MODEL_DATA_POLICIES);
+const MODEL_ROUTING_POLICY_KEYS = new Set(['allowedBackendIds', 'deniedBackendIds', 'maxCostTier', 'dataPolicy', 'preferLocal']);
 
 function requireString(value, label) {
   if (typeof value !== 'string' || !value.trim()) throw new Error(`${label} must be a non-empty string`);
@@ -35,11 +41,37 @@ function backendAllowedByDataPolicy(backend, dataPolicy) {
   if (dataPolicy === 'trusted') return backend.location === 'local' || backend.trusted;
   return true;
 }
+function normalizeRoutingBackendIds(value, label, { nullable = false } = {}) {
+  if (value == null && nullable) return null;
+  const list = value == null ? [] : value;
+  if (!Array.isArray(list)) throw new Error(`${label} must be an array`);
+  if (list.length > MAX_MODEL_ROUTING_BACKEND_IDS) throw new Error(`${label} exceeds ${MAX_MODEL_ROUTING_BACKEND_IDS} ids`);
+  return [...new Set(list.map((value) => {
+    if (typeof value !== 'string' || !value.trim()) throw new Error(`${label} must contain non-empty string ids`);
+    const id = value.trim();
+    if (id.length > MAX_MODEL_ROUTING_BACKEND_ID_CHARS) throw new Error(`${label} id exceeds ${MAX_MODEL_ROUTING_BACKEND_ID_CHARS} characters`);
+    return id;
+  }))];
+}
+export function normalizeModelRoutingPolicy(policy = {}) {
+  const clean = normalizeBoundedModelJsonObject(policy, 'Model routing policy', { maxBytes: MAX_MODEL_ROUTER_OPTIONS_BYTES });
+  for (const key of Object.keys(clean)) if (!MODEL_ROUTING_POLICY_KEYS.has(key)) throw new Error(`Unsupported model routing policy field: ${key}`);
+  const allowedBackendIds = normalizeRoutingBackendIds(clean.allowedBackendIds, 'Model routing allowedBackendIds', { nullable: true });
+  const deniedBackendIds = normalizeRoutingBackendIds(clean.deniedBackendIds, 'Model routing deniedBackendIds');
+  const maxCostTier = clean.maxCostTier ?? 3;
+  if (!Number.isInteger(maxCostTier) || maxCostTier < 0 || maxCostTier > 3) throw new Error('Model routing maxCostTier must be an integer between 0 and 3');
+  if (clean.preferLocal !== undefined && typeof clean.preferLocal !== 'boolean') throw new Error('Model routing preferLocal must be a boolean');
+  return { allowedBackendIds, deniedBackendIds, maxCostTier, dataPolicy: normalizeDataPolicy(clean.dataPolicy ?? 'any'), preferLocal: clean.preferLocal ?? false };
+}
 function normalizeRoutingPolicy(policy = {}) {
-  const allowed = policy.allowedBackendIds == null ? null : new Set(policy.allowedBackendIds.map(String));
-  const denied = new Set((policy.deniedBackendIds ?? []).map(String));
-  const maxCostTier = Math.max(0, Math.min(3, Math.floor(Number(policy.maxCostTier ?? 3))));
-  return { allowed, denied, maxCostTier, dataPolicy: normalizeDataPolicy(policy.dataPolicy ?? 'any'), preferLocal: Boolean(policy.preferLocal) };
+  const clean = normalizeModelRoutingPolicy(policy);
+  return {
+    allowed: clean.allowedBackendIds == null ? null : new Set(clean.allowedBackendIds),
+    denied: new Set(clean.deniedBackendIds),
+    maxCostTier: clean.maxCostTier,
+    dataPolicy: clean.dataPolicy,
+    preferLocal: clean.preferLocal,
+  };
 }
 
 export class ModelUnsupportedError extends Error {
@@ -107,13 +139,14 @@ export class ModelRouter {
   async execute(operation, input, { signal, context = {}, policy = {} } = {}) {
     if (!MODEL_OPERATION_SET.has(operation)) throw new Error(`Unsupported model operation: ${operation}`);
     if (signal?.aborted) throw abortError();
+    const cleanContext = normalizeBoundedModelJsonObject(context, 'Model execution context', { maxBytes: MAX_MODEL_ROUTER_OPTIONS_BYTES });
     const attempts = [];
     const candidates = this.list(operation, policy);
     for (const backend of candidates) {
       if (signal?.aborted) throw abortError();
       let result;
       try {
-        result = await backend.invoke(operation, input, { signal, context, backend });
+        result = await backend.invoke(operation, input, { signal, context: cleanContext, backend });
       } catch (error) {
         error.modelBackendId ??= backend.id;
         throw error;

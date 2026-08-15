@@ -1,3 +1,4 @@
+import { normalizeModelRoutingPolicy } from './model-router.js';
 import { operationLogChecksum } from './operation-log.js';
 import { createPlannerSnapshot } from './providers.js';
 import { createSemanticIndex, searchSemanticGraph } from './semantic-search.js';
@@ -194,10 +195,11 @@ export async function embedSemanticQuery(router, index, query, { policy = {}, si
   requireRouter(router);
   assertSemanticEmbeddingIndex(index);
   if (typeof query !== 'string' || !query.trim()) return [];
-  const callerAllowed = policy.allowedBackendIds == null ? null : new Set(policy.allowedBackendIds.map(String));
+  const cleanPolicy = normalizeModelRoutingPolicy(policy);
+  const callerAllowed = cleanPolicy.allowedBackendIds == null ? null : new Set(cleanPolicy.allowedBackendIds);
   const queryPolicy = index.backendId
-    ? { ...policy, allowedBackendIds: callerAllowed == null || callerAllowed.has(index.backendId) ? [index.backendId] : [] }
-    : policy;
+    ? { ...cleanPolicy, allowedBackendIds: callerAllowed == null || callerAllowed.has(index.backendId) ? [index.backendId] : [] }
+    : cleanPolicy;
   const routed = await router.execute('embed', { texts: [query.trim().slice(0, MAX_DOCUMENT_TEXT_CHARS)] }, { signal, policy: queryPolicy, context: { purpose: 'semantic-query', projectId: index.projectId } });
   if (index.backendId && routed.backendId !== index.backendId) throw new Error(`Semantic query backend ${routed.backendId} does not match index backend ${index.backendId}`);
   const normalized = normalizeEmbedOutput(routed.output, 1, index.dimensions);
