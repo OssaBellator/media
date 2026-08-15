@@ -88,5 +88,5 @@ export class CompositionPlaybackEngine {
   showFallback(container){this.invalidate();showSurface(container,null);}
   stats(){return{...this.metrics,staleFrameRatio:(this.metrics.presented+this.metrics.stale)?this.metrics.stale/(this.metrics.presented+this.metrics.stale):0,fidelity:this.lastFidelity};}
   clear(){this.invalidate();this.lastFidelity=null;this.frameProvider.clear?.();this.gpuRenderer?.clear?.();}
-  close(){this.clear();}
+  close(){this.invalidate();this.lastFidelity=null;if(typeof this.frameProvider?.close==='function')this.frameProvider.close();else this.frameProvider?.clear?.();this.gpuRenderer?.clear?.();}
 }

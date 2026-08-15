@@ -11,6 +11,8 @@
 - bounded decoded video/audio live queues plus playhead-driven presentation scheduling and representation-switch cleanup;
 - browser live output that reuses the Cut kernel canvas and schedules decoded AudioData on an AudioContext clock with late-sample offsets and drift correction;
 - DASH video routing through the normal Cut composition frame-provider seam, preserving clip source-time, transforms, masks, effects, temporal rendering and GPU/Canvas composition while leaving ordinary file assets on the existing kernel provider;
+- explicit Cut scrub/playback mode propagation into adaptive frame requests, forcing decoder flushes for scrubs while keeping continuous DASH playback streaming after bootstrap;
+- muxed DASH visual-clip audio routed by default into a Cut-owned browser audio scheduler, with relink/invalidation reset and composition-lifecycle cleanup;
 - 188-byte MPEG-TS ingest for legacy HLS with PAT/PMT, PES, timestamp unwrap, H.264/H.265 access units and AAC/ADTS reframing;
 - trusted `media.codec.v1` plugin backends and async production kernel startup;
 - display/HDR output policy applied at GPU renderer construction;
@@ -28,7 +30,7 @@
 
 ## Next hardening
 
-1. propagate explicit scrub/playback mode into composition frame-provider requests so continuous DASH playback can avoid per-frame decoder flushes, then add real live-media latency/conformance fixtures and muxed-audio integration for adaptive visual clips;
+1. add real live-media latency/conformance fixtures and expand encrypted/adaptive HLS/DASH lab coverage;
 2. integrate temporal motion blur/vector mattes into normal Cut GPU scheduling rather than reference-only paths;
 3. platform color management, display calibration and actual HDR swap-chain/output surfaces;
 4. signed/integrity-pinned codec plugin packaging and real native/WASM codec distributions;
