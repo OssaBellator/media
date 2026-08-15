@@ -4,7 +4,9 @@ import { DEFAULT_MODEL_INPUT_BYTES, DEFAULT_MODEL_OPTIONS_BYTES, normalizeBounde
 import { createPlannerSnapshot } from './providers.js';
 
 const GENERATED_OPERATION_SET = new Set(GENERATED_MEDIA_OPERATIONS);
+const GENERATED_MODEL_RESULT_KEYS = new Set(['artifact', 'metadata', 'payload']);
 export const MAX_GENERATION_CONTEXT_IDS = 1024;
+export const MAX_GENERATED_MODEL_DESCRIPTOR_BYTES = MAX_GENERATION_RECORD_BYTES;
 export const MAX_GENERATION_CONTEXT_ID_CHARS = 512;
 export const MAX_GENERATION_MODEL_INPUT_BYTES = DEFAULT_MODEL_INPUT_BYTES;
 export const MAX_GENERATION_MODEL_OPTIONS_BYTES = DEFAULT_MODEL_OPTIONS_BYTES;
@@ -40,13 +42,23 @@ function normalizeGenerationIntent(value) {
 
 export function assertGeneratedModelResult(result) {
   if (!result || typeof result !== 'object' || Array.isArray(result)) throw new Error('Generated model result must be an object');
-  if (!result.artifact || typeof result.artifact !== 'object' || Array.isArray(result.artifact)) throw new Error('Generated model result requires an artifact descriptor');
-  if (typeof result.artifact.name !== 'string' || !result.artifact.name.trim()) throw new Error('Generated artifact requires a name');
-  if (typeof result.artifact.mimeType !== 'string' || !result.artifact.mimeType.trim()) throw new Error('Generated artifact requires a mimeType');
-  if (result.metadata !== undefined && (!result.metadata || typeof result.metadata !== 'object' || Array.isArray(result.metadata))) throw new Error('Generated model metadata must be an object');
-  cloneJson(result.artifact, 'Generated artifact descriptor');
-  if (result.metadata !== undefined) cloneJson(result.metadata, 'Generated model metadata');
-  return result;
+  const prototype = Object.getPrototypeOf(result);
+  if (prototype !== Object.prototype && prototype !== null) throw new Error('Generated model result must be a plain data object');
+  const descriptors = Object.getOwnPropertyDescriptors(result);
+  for (const key of Reflect.ownKeys(descriptors)) {
+    if (typeof key !== 'string' || !GENERATED_MODEL_RESULT_KEYS.has(key)) throw new Error(`Unsupported generated model result field: ${String(key)}`);
+    const descriptor = descriptors[key];
+    if (!descriptor.enumerable || !('value' in descriptor)) throw new Error('Generated model result must contain enumerable data fields only');
+  }
+  const artifactValue = descriptors.artifact?.value;
+  if (!artifactValue || typeof artifactValue !== 'object' || Array.isArray(artifactValue)) throw new Error('Generated model result requires an artifact descriptor');
+  const artifact = normalizeBoundedModelJsonObject(artifactValue, 'Generated artifact descriptor', { maxBytes: MAX_GENERATED_MODEL_DESCRIPTOR_BYTES });
+  if (typeof artifact.name !== 'string' || !artifact.name.trim()) throw new Error('Generated artifact requires a name');
+  if (typeof artifact.mimeType !== 'string' || !artifact.mimeType.trim()) throw new Error('Generated artifact requires a mimeType');
+  const metadata = descriptors.metadata === undefined
+    ? undefined
+    : normalizeBoundedModelJsonObject(descriptors.metadata.value, 'Generated model metadata', { maxBytes: MAX_GENERATED_MODEL_DESCRIPTOR_BYTES });
+  return Object.freeze({ artifact, ...(descriptors.payload ? { payload: descriptors.payload.value } : {}), ...(metadata !== undefined ? { metadata } : {}) });
 }
 
 export async function runGeneratedMediaModel(router, graph, {

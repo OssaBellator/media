@@ -4,7 +4,7 @@ import { createGraph, createNode } from '../src/graph.js';
 import { applyOperations } from '../src/operations.js';
 import { createCreativeObjectOperations } from '../src/creative-object.js';
 import { ModelRouter } from '../src/model-router.js';
-import { MAX_GENERATION_CONTEXT_IDS, runGeneratedMediaModel } from '../src/generation-runner.js';
+import { assertGeneratedModelResult, MAX_GENERATED_MODEL_DESCRIPTOR_BYTES, MAX_GENERATION_CONTEXT_IDS, runGeneratedMediaModel } from '../src/generation-runner.js';
 import { MAX_GENERATION_INTENT_CHARS } from '../src/generated-media.js';
 
 test('generation runner routes a model result and returns graph operations while keeping payload ephemeral', async () => {
@@ -64,4 +64,43 @@ test('generation runner rejects malformed model artifact contracts before creati
   const graph = createGraph('Film');
   const router = new ModelRouter().register({ id: 'bad', operations: ['generate-video'], invoke: async () => ({ artifact: { name: 'missing-mime' } }) });
   await assert.rejects(() => runGeneratedMediaModel(router, graph, { operation: 'generate-video' }), /mimeType/);
+});
+
+
+test('generated model result rejects root and nested accessors without executing them', () => {
+  let artifactGetterCalls = 0;
+  const root = {};
+  Object.defineProperty(root, 'artifact', { enumerable: true, get() { artifactGetterCalls += 1; return { name: 'x.png', mimeType: 'image/png' }; } });
+  assert.throws(() => assertGeneratedModelResult(root), /enumerable data fields only/);
+  assert.equal(artifactGetterCalls, 0);
+
+  let nameGetterCalls = 0;
+  const artifact = { mimeType: 'image/png' };
+  Object.defineProperty(artifact, 'name', { enumerable: true, get() { nameGetterCalls += 1; return 'x.png'; } });
+  assert.throws(() => assertGeneratedModelResult({ artifact }), /artifact descriptor must be JSON-safe/i);
+  assert.equal(nameGetterCalls, 0);
+
+  let payloadGetterCalls = 0;
+  const payloadRoot = { artifact: { name: 'x.png', mimeType: 'image/png' } };
+  Object.defineProperty(payloadRoot, 'payload', { enumerable: true, get() { payloadGetterCalls += 1; return new Uint8Array([1]); } });
+  assert.throws(() => assertGeneratedModelResult(payloadRoot), /enumerable data fields only/);
+  assert.equal(payloadGetterCalls, 0);
+});
+
+test('generated model result bounds JSON descriptors and preserves payload by identity', () => {
+  const payload = new Uint8Array([1, 2, 3]);
+  const artifact = { name: 'x.png', mimeType: 'image/png', nested: { safe: true } };
+  const metadata = { model: 'v1', nested: { revision: 1 } };
+  const result = assertGeneratedModelResult({ artifact, payload, metadata });
+  assert.equal(result.payload, payload);
+  assert.notEqual(result.artifact, artifact);
+  assert.notEqual(result.metadata, metadata);
+  artifact.nested.safe = false;
+  metadata.nested.revision = 2;
+  assert.equal(result.artifact.nested.safe, true);
+  assert.equal(result.metadata.nested.revision, 1);
+  assert.equal(Object.isFrozen(result), true);
+  assert.throws(() => assertGeneratedModelResult({ artifact: { name: 'x.png', mimeType: 'image/png', huge: 'x'.repeat(MAX_GENERATED_MODEL_DESCRIPTOR_BYTES + 1) } }), /artifact descriptor.*exceeds 65536 bytes/i);
+  assert.throws(() => assertGeneratedModelResult({ artifact: { name: 'x.png', mimeType: 'image/png' }, metadata: { huge: 'x'.repeat(MAX_GENERATED_MODEL_DESCRIPTOR_BYTES + 1) } }), /metadata.*exceeds 65536 bytes/i);
+  assert.throws(() => assertGeneratedModelResult({ artifact: { name: 'x.png', mimeType: 'image/png' }, debug: 'hidden' }), /Unsupported generated model result field: debug/);
 });
