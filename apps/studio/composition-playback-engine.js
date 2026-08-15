@@ -32,7 +32,7 @@ export class CompositionPlaybackEngine {
     const evaluated=this.evaluate(graph,{compositionId,time});
     return this.presentEvaluated(graph,evaluated,container,options);
   }
-  async presentEvaluated(graph,evaluated,container,{priority=100,signal,fidelity=null}={}){
+  async presentEvaluated(graph,evaluated,container,{priority=100,signal,fidelity=null,mode='playback'}={}){
     this.metrics.requests++;
     const generation=++this.generation;
     this.lastFidelity=fidelity?{...fidelity}:null;
@@ -42,9 +42,10 @@ export class CompositionPlaybackEngine {
     const scaleOptions={maxWidth:this.maxWidth*resolutionScale,maxHeight:this.maxHeight*resolutionScale,maxPixels:this.maxPixels*resolutionScale*resolutionScale};
     const plan=this.scalePlan(raw,scaleOptions);
     const assetResolver=(id)=>graph.nodes[id];
+    const frameProvider=this.frameProvider?.forRequest?.({mode})??this.frameProvider;
     if(shouldTemporalAccumulate(raw,this.lastFidelity)){
       const scratch=this.canvasFactory();
-      const temporal=await this.temporalRenderer(scratch,graph,raw,{evaluate:this.evaluate,scalePlan:this.scalePlan,scaleOptions,renderer:this.renderer,assetResolver,frameProvider:this.frameProvider,priority,signal,fidelity:this.lastFidelity,canvasFactory:this.canvasFactory});
+      const temporal=await this.temporalRenderer(scratch,graph,raw,{evaluate:this.evaluate,scalePlan:this.scalePlan,scaleOptions,renderer:this.renderer,assetResolver,frameProvider,priority,signal,fidelity:this.lastFidelity,canvasFactory:this.canvasFactory});
       if(generation!==this.generation){this.metrics.stale++;return{stale:true,plan,result:temporal,fidelity:this.lastFidelity};}
       const target=surfaceCanvas(container,'canvas2d',this.canvasFactory);
       if(!target)throw new Error('Composition playback target is unavailable');
@@ -62,14 +63,14 @@ export class CompositionPlaybackEngine {
         const target=surfaceCanvas(container,'webgpu',this.canvasFactory);
         if(!target)throw new Error('GPU composition target is unavailable');
         target.width=plan.width;target.height=plan.height;
-        const gpu=await this.gpuRenderer.present(target,plan,{assetResolver,frameProvider:this.frameProvider,priority,signal,fidelity:this.lastFidelity,shouldCommit:()=>generation===this.generation});
+        const gpu=await this.gpuRenderer.present(target,plan,{assetResolver,frameProvider,priority,signal,fidelity:this.lastFidelity,shouldCommit:()=>generation===this.generation});
         if(gpu?.stale){this.metrics.stale++;return{stale:true,plan,result:gpu,fidelity:this.lastFidelity};}
         showSurface(container,'webgpu');this.metrics.presented++;this.metrics.gpu++;
         return{...gpu,plan,canvas:target,fidelity:this.lastFidelity};
       }catch(error){if(error?.name==='AbortError')throw error;/* preserve Canvas2D as deterministic fallback */}
     }
     const scratch=this.canvasFactory();
-    const result=await this.renderer(scratch,plan,{assetResolver,frameProvider:this.frameProvider,priority,signal,fidelity:this.lastFidelity});
+    const result=await this.renderer(scratch,plan,{assetResolver,frameProvider,priority,signal,fidelity:this.lastFidelity});
     if(generation!==this.generation){this.metrics.stale++;return{stale:true,plan,result,fidelity:this.lastFidelity};}
     const target=surfaceCanvas(container,'canvas2d',this.canvasFactory);
     if(!target)throw new Error('Composition playback target is unavailable');

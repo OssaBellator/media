@@ -17,7 +17,7 @@ export class FidelityPlaybackEngine{
     const fidelity=this.controller.plan({mode,fps:resolvedFps,requestedTemporalSamples,requestedVectorSupersample});
     const started=clock();
     try{
-      const result=await this.render(evaluated,{...options,fidelity,graph,time});
+      const result=await this.render(evaluated,{...options,fidelity,graph,time,mode});
       const stale=Boolean(result?.stale);
       this.controller.record({durationMs:clock()-started,stale});
       if(stale)this.metrics.stale++;else this.metrics.presented++;
