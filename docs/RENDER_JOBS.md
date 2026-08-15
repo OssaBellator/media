@@ -46,6 +46,24 @@ The application supplies one atomic `persist({ trustRegistry, jobs })` callback.
 
 Multiple jobs deliberately share one coordinator serialization boundary so two concurrent workers cannot race the same replay registry even when they target different render jobs.
 
+## Durable coordinator store contract
+
+`packages/core/src/render-worker-store.js` adds a deployment-neutral persistence wrapper around the atomic coordinator. `media.render-worker-coordinator-store.v1` snapshots carry a store revision separately from the trust-registry revision plus the exact `{ trustRegistry, jobs }` state.
+
+A deployment injects `load()` and `compareAndSwap({ expectedRevision, snapshot, metadata })`. Every accepted worker transition advances the store revision by exactly one. Two coordinator processes that loaded the same revision cannot overwrite each other: one compare-and-swap can commit, while the stale process receives `ERR_RENDER_WORKER_STORE_CONFLICT`, must reload, and can retry its signed message only if the durable trust state proves that nonce was not already consumed.
+
+A datastore exception during compare-and-swap is intentionally treated as an **unknown commit state**. `ERR_RENDER_WORKER_STORE_UNKNOWN_COMMIT` marks the session reload-required and blocks all further signed messages until `reload()` establishes whether the candidate state became durable. This preserves the same no-retry-on-ambiguous-delivery rule at the datastore boundary.
+
+An empty durable store does not silently create a new trust domain. Initial bootstrap requires an explicit `initialTrustRegistry`; otherwise opening fails closed with `ERR_RENDER_WORKER_STORE_BOOTSTRAP`.
+
+## Stored artifact verification
+
+`packages/core/src/render-artifact-store.js` provides the concrete exact-byte verifier expected by remote completions. A deployment injects `readArtifact(context)` and the verifier reads a bounded `Uint8Array`, `ArrayBuffer`/view, `Blob`, `ReadableStream`, or `{ bytes }` result, computes SHA-256, and compares it with the worker-signed hex or SRI integrity descriptor.
+
+Missing, oversized or digest-mismatched bytes return a failed verification. Storage read failures remain service errors (`ERR_RENDER_ARTIFACT_STORE_READ`) rather than being disguised as content mismatches. `createStoredRenderArtifactVerifier()` adapts this directly to the coordinator's boolean `verifyArtifact` callback.
+
+The core verifier reads the actual stored bytes; object-store metadata, ETags or caller claims are not accepted as substitutes for the signed SHA-256 digest.
+
 ## Bounded transport boundary
 
 `media.render-worker-wire.v1` wraps one signed `media.render-worker.v1` message with a bounded request ID. Parsing is strict UTF-8/JSON with explicit byte ceilings and no unknown top-level fields. Successful responses expose only the action, job/chunk coordinate, attempt/index, commit state and completion integrity; they do not return the job object, artifact descriptor, worker signature, trust registry or key record. Authentication, replay, state and artifact failures are mapped to stable coarse errors rather than verifier/storage internals.
@@ -60,10 +78,10 @@ None of these modules starts a socket or HTTP listener.
 
 The final assembly index remains independent of storage implementation so native/cloud renderers can use the same job state and byte/time segment contract. A production distributed renderer still needs:
 
-- a durable coordinator datastore implementing the atomic `{ trustRegistry, jobs }` commit callback;
-- artifact upload/storage and a verifier that proves stored bytes match the signed SHA-256 descriptor;
+- a real durable datastore adapter implementing the revisioned `load`/`compareAndSwap` contract with transactional durability;
+- artifact upload/object storage plus a `readArtifact` adapter that returns the exact stored bytes to the SHA-256 verifier;
 - scheduler/worker discovery and retry policy around creation of **new** signed claim/completion messages;
 - a host HTTP/WebSocket listener, TLS/session authentication and deployment authorization policy;
 - administrative identity/key enrollment, rotation and revocation operations.
 
-Those deployment services must preserve the core no-retry rule for an ambiguously delivered signed worker message.
+Those deployment services must preserve both reload-on-ambiguous-CAS and no-retry-on-ambiguous-network-delivery rules for signed worker messages.
