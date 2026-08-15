@@ -6,11 +6,11 @@ function previewChangeValue(value) {
   try { return JSON.stringify(value); } catch { return String(value); }
 }
 
-function operationMarkup(operation) {
+function operationMarkup(operation, atomic = false) {
   const changes = operation.changes?.length
     ? `<ul>${operation.changes.map((change) => `<li><code>${escapeHtml(change.path)}</code> ${escapeHtml(previewChangeValue(change.before))} → ${escapeHtml(previewChangeValue(change.after))}</li>`).join('')}</ul>`
     : '';
-  return `<label class="activity-card agent-operation"><div><input type="checkbox" data-agent-operation="${operation.index}" checked /><strong>${escapeHtml(operation.summary)}</strong></div><p>${escapeHtml(operation.type)}</p>${changes}</label>`;
+  return `<label class="activity-card agent-operation"><div><input type="checkbox" data-agent-operation="${operation.index}" checked ${atomic ? 'disabled' : ''}/><strong>${escapeHtml(operation.summary)}</strong></div><p>${escapeHtml(operation.type)}</p>${changes}</label>`;
 }
 
 function reviewMarkup(state) {
@@ -22,7 +22,9 @@ function reviewMarkup(state) {
   if (!review) return '';
   const workflow = state.workflow ? `<span>${state.workflow.taskCount} workflow tasks · ${state.workflow.assetWriteCount} staged asset writes</span>` : '';
   const operationCount = review.operations.length;
-  return `<section class="agent-review" data-agent-review><article class="activity-card"><div><span class="activity-dot"></span><strong>${escapeHtml(review.summary || review.intent)}</strong></div><p>${escapeHtml(review.provider?.label || review.provider?.id)} · revision ${review.revision} · ${operationCount} operation${operationCount === 1 ? '' : 's'}</p>${workflow}</article><div class="activity-list">${review.operations.map(operationMarkup).join('')}</div><div class="command-footer"><span>${operationCount ? 'Uncheck operations you do not want committed.' : 'This proposal has no graph operations.'}</span><div class="button-grid"><button type="button" data-agent-discard>Discard</button><button type="button" data-agent-revise>Re-plan</button><button type="button" class="primary-button" data-agent-apply ${operationCount ? '' : 'disabled'}>Apply selected</button></div></div></section>`;
+  const atomic = state.plan?.metadata?.review?.atomic === true || state.plan?.metadata?.creativeObjectRestyle?.atomic === true;
+  const selectionHint = !operationCount ? 'This proposal has no graph operations.' : atomic ? 'This proposal is atomic: generated assets, provenance, and rewires apply together.' : 'Uncheck operations you do not want committed.';
+  return `<section class="agent-review" data-agent-review><article class="activity-card"><div><span class="activity-dot"></span><strong>${escapeHtml(review.summary || review.intent)}</strong></div><p>${escapeHtml(review.provider?.label || review.provider?.id)} · revision ${review.revision} · ${operationCount} operation${operationCount === 1 ? '' : 's'}</p>${workflow}</article><div class="activity-list">${review.operations.map((operation) => operationMarkup(operation, atomic)).join('')}</div><div class="command-footer"><span>${selectionHint}</span><div class="button-grid"><button type="button" data-agent-discard>Discard</button><button type="button" data-agent-revise>Re-plan</button><button type="button" class="primary-button" data-agent-apply ${operationCount ? '' : 'disabled'}>${atomic ? 'Apply all' : 'Apply selected'}</button></div></div></section>`;
 }
 
 export function renderAgentReviewPanel(root, state) {

@@ -15,6 +15,19 @@ function persistContextForOperations(persistContext, operations) {
   return next;
 }
 
+function atomicReviewRequired(plan) {
+  return plan?.metadata?.review?.atomic === true || plan?.metadata?.creativeObjectRestyle?.atomic === true;
+}
+
+function assertAtomicSelection(plan, operationIndexes) {
+  if (!atomicReviewRequired(plan)) return;
+  const indexes = operationIndexes.map(Number);
+  const expected = plan.operations.length;
+  const sorted = [...new Set(indexes)].sort((a, b) => a - b);
+  const complete = indexes.length === expected && sorted.length === expected && sorted.every((value, index) => value === index);
+  if (!complete) throw new Error('This Agent proposal requires atomic review and cannot apply a partial operation selection');
+}
+
 export class AgentProposalSession {
   constructor({ provider, getGraph, commit } = {}) {
     if (!provider || typeof provider.plan !== 'function') throw new Error('Agent proposal session requires a planner provider');
@@ -53,6 +66,8 @@ export class AgentProposalSession {
   select(operationIndexes, options = {}) {
     if (!this.pending) throw new Error('No Agent proposal is pending');
     if (!Array.isArray(operationIndexes) || !operationIndexes.length) throw new Error('At least one Agent operation must remain selected');
+    assertAtomicSelection(this.pending, operationIndexes);
+    if (atomicReviewRequired(this.pending)) return this.snapshot();
     this.pending = selectAgentPlanOperations(this.getGraph(), this.pending, operationIndexes, options);
     return this.snapshot();
   }
