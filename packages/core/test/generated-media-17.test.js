@@ -52,3 +52,11 @@ test('generation source identities are deduplicated in records and graph edges',
   assert.deepEqual(graph.nodes[asset.id].props.generation.sourceNodeIds, ['source']);
   assert.equal(Object.values(graph.edges).filter((edge) => edge.from === asset.id && edge.type === 'derives-from').length, 1);
 });
+
+test('generated asset materialization rejects forged and oversized generation records', () => {
+  const graph = createGraph('Film');
+  const forged = { schema: 'media.generation-record.v1', id: 'g', operation: 'generate-image', backendId: '', intent: '', settings: {}, parentPlanId: null, sourceNodeIds: [], createdAt: 'now', metadata: {} };
+  assert.throws(() => createGeneratedAssetOperations(graph, { artifact: { name: 'out.png', mimeType: 'image/png' }, generation: forged }), /backendId/);
+  assert.throws(() => createGenerationRecord({ operation: 'generate-image', backendId: 'x', intent: 'x'.repeat(16 * 1024 + 1) }), /intent exceeds/);
+  assert.throws(() => createGenerationRecord({ operation: 'generate-image', backendId: 'x', metadata: { huge: 'x'.repeat(70 * 1024) } }), /record exceeds/);
+});

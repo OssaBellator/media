@@ -5,6 +5,8 @@ import { createAsset } from './project.js';
 
 export const GENERATION_RECORD_SCHEMA = 'media.generation-record.v1';
 export const GENERATED_MEDIA_OPERATIONS = Object.freeze(['generate-image', 'edit-image', 'generate-video', 'edit-video', 'generate-audio', 'edit-audio', 'synthesize-speech']);
+export const MAX_GENERATION_RECORD_BYTES = 64 * 1024;
+export const MAX_GENERATION_INTENT_CHARS = 16 * 1024;
 const GENERATED_MEDIA_OPERATION_SET = new Set(GENERATED_MEDIA_OPERATIONS);
 
 function requireString(value, label) {
@@ -15,10 +17,33 @@ function cloneJson(value, label) {
   try { return JSON.parse(canonicalOperationLogJson(value)); }
   catch (error) { throw new Error(`${label} must be JSON-safe: ${error.message}`, { cause: error }); }
 }
+function utf8Bytes(text) { return new TextEncoder().encode(text).byteLength; }
 function expectedMediaKind(operation) {
   if (operation.includes('image')) return 'image';
   if (operation.includes('video')) return 'video';
   return 'audio';
+}
+
+export function assertGenerationRecord(record, { maxBytes = MAX_GENERATION_RECORD_BYTES } = {}) {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) throw new Error('Generation record must be an object');
+  if (record.schema !== GENERATION_RECORD_SCHEMA) throw new Error(`Unsupported generation record schema: ${record.schema}`);
+  requireString(record.id, 'Generation id');
+  const operation = requireString(record.operation, 'Generation operation');
+  if (!GENERATED_MEDIA_OPERATION_SET.has(operation)) throw new Error(`Unsupported generated media operation: ${operation}`);
+  requireString(record.backendId, 'Generation backendId');
+  if (record.requestId != null) requireString(record.requestId, 'Generation requestId');
+  if (typeof record.intent !== 'string') throw new Error('Generation intent must be a string');
+  if (record.intent.length > MAX_GENERATION_INTENT_CHARS) throw new Error(`Generation intent exceeds ${MAX_GENERATION_INTENT_CHARS} characters`);
+  if (!record.settings || typeof record.settings !== 'object' || Array.isArray(record.settings)) throw new Error('Generation settings must be an object');
+  if (record.parentPlanId != null) requireString(record.parentPlanId, 'Generation parentPlanId');
+  if (!Array.isArray(record.sourceNodeIds) || record.sourceNodeIds.some((id) => typeof id !== 'string' || !id)) throw new Error('Generation sourceNodeIds must contain non-empty strings');
+  if (new Set(record.sourceNodeIds).size !== record.sourceNodeIds.length) throw new Error('Generation sourceNodeIds must be unique');
+  requireString(record.createdAt, 'Generation createdAt');
+  if (!record.metadata || typeof record.metadata !== 'object' || Array.isArray(record.metadata)) throw new Error('Generation metadata must be an object');
+  const canonical = canonicalOperationLogJson(record);
+  const limit = Math.max(1024, Math.floor(Number(maxBytes) || MAX_GENERATION_RECORD_BYTES));
+  if (utf8Bytes(canonical) > limit) throw new Error(`Generation record exceeds ${limit} bytes`);
+  return record;
 }
 
 export function createGenerationRecord({
@@ -49,8 +74,7 @@ export function createGenerationRecord({
     createdAt: requireString(createdAt, 'Generation createdAt'),
     metadata: cloneJson(metadata, 'Generation metadata'),
   };
-  canonicalOperationLogJson(record);
-  return record;
+  return assertGenerationRecord(record);
 }
 
 export function createGeneratedAssetOperations(graph, {
@@ -60,15 +84,15 @@ export function createGeneratedAssetOperations(graph, {
   creativeObjectIds = [],
 } = {}) {
   if (!artifact || typeof artifact !== 'object') throw new Error('Generated media requires an artifact descriptor');
-  if (!generation || generation.schema !== GENERATION_RECORD_SCHEMA) throw new Error('Generated media requires a generation record');
+  assertGenerationRecord(generation);
   if (!Array.isArray(sourceNodeIds) || !Array.isArray(creativeObjectIds)) throw new Error('Generated media source/object ids must be arrays');
-  const sources = [...new Set(sourceNodeIds.map(String))];
+  const sources = [...new Set(sourceNodeIds.map((value) => requireString(String(value), 'Generation source node id')))];
   for (const sourceId of sources) if (!graph.nodes[sourceId]) throw new Error(`Unknown generation source node: ${sourceId}`);
-  const objects = [...new Set(creativeObjectIds.map(String))];
+  const objects = [...new Set(creativeObjectIds.map((value) => requireString(String(value), 'Generation creative object id')))];
   for (const objectId of objects) if (graph.nodes[objectId]?.kind !== 'object') throw new Error(`Unknown generation creative object: ${objectId}`);
   const baseAsset = createAsset(artifact);
   if (baseAsset.props.mediaKind !== expectedMediaKind(generation.operation)) throw new Error(`Generated artifact media kind ${baseAsset.props.mediaKind} does not match ${generation.operation}`);
-  const record = { ...generation, sourceNodeIds: sources };
+  const record = assertGenerationRecord({ ...cloneJson(generation, 'Generation record'), sourceNodeIds: sources });
   const asset = { ...baseAsset, props: { ...baseAsset.props, generated: true, generation: record } };
   const operations = [
     { type: 'node.add', node: asset },
@@ -85,7 +109,8 @@ export function createGeneratedAssetOperations(graph, {
 
 export function generatedAssetProvenance(graph, assetId) {
   const asset = graph?.nodes?.[assetId];
-  if (!asset || asset.kind !== 'asset' || asset.props?.generated !== true || asset.props?.generation?.schema !== GENERATION_RECORD_SCHEMA) return null;
+  if (!asset || asset.kind !== 'asset' || asset.props?.generated !== true) return null;
+  try { assertGenerationRecord(asset.props?.generation); } catch { return null; }
   const sourceIds = edgesFrom(graph, assetId, 'derives-from').map((edge) => edge.to).sort();
   const creativeObjectIds = edgesTo(graph, assetId, 'relates-to').filter((edge) => edge.props?.role === 'generated-representation').map((edge) => edge.from).sort();
   return { assetId, generation: cloneJson(asset.props.generation, 'Stored generation record'), sourceNodeIds: sourceIds, creativeObjectIds };
