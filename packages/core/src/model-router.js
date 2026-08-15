@@ -16,6 +16,7 @@ const MODEL_OPERATION_SET = new Set(MODEL_OPERATIONS);
 const MODEL_DATA_POLICY_SET = new Set(MODEL_DATA_POLICIES);
 const MODEL_ROUTING_POLICY_KEYS = new Set(['allowedBackendIds', 'deniedBackendIds', 'maxCostTier', 'dataPolicy', 'preferLocal']);
 const MODEL_BACKEND_DESCRIPTOR_KEYS = new Set(['id', 'label', 'operations', 'priority', 'location', 'trusted', 'costTier', 'metadata', 'invoke']);
+const MODEL_EXECUTION_OPTION_KEYS = new Set(['signal', 'context', 'policy']);
 
 function requireString(value, label) {
   if (typeof value !== 'string' || !value.trim()) throw new Error(`${label} must be a non-empty string`);
@@ -106,6 +107,29 @@ function abortError() {
   const error = new Error('Model operation aborted');
   error.name = 'AbortError';
   return error;
+}
+function normalizeExecutionOptions(options = {}) {
+  if (!options || typeof options !== 'object' || Array.isArray(options)) throw new Error('Model execution options must be a plain data object');
+  const prototype = Object.getPrototypeOf(options);
+  if (prototype !== Object.prototype && prototype !== null) throw new Error('Model execution options must be a plain data object');
+  const descriptors = Object.getOwnPropertyDescriptors(options);
+  const clean = {};
+  for (const key of Reflect.ownKeys(descriptors)) {
+    if (typeof key !== 'string' || !MODEL_EXECUTION_OPTION_KEYS.has(key)) throw new Error(`Unsupported model execution option: ${String(key)}`);
+    const descriptor = descriptors[key];
+    if (!descriptor.enumerable || !Object.hasOwn(descriptor, 'value')) throw new Error('Model execution options must contain enumerable data fields only');
+    clean[key] = descriptor.value;
+  }
+  const signal = clean.signal ?? null;
+  if (signal != null) {
+    const AbortSignalCtor = globalThis.AbortSignal;
+    if (typeof AbortSignalCtor !== 'function' || !(signal instanceof AbortSignalCtor)) throw new Error('Model execution signal must be an AbortSignal');
+  }
+  return {
+    signal,
+    context: normalizeBoundedModelJsonObject(clean.context ?? {}, 'Model execution context', { maxBytes: MAX_MODEL_ROUTER_OPTIONS_BYTES }),
+    policy: normalizeModelRoutingPolicy(clean.policy ?? {}),
+  };
 }
 function backendAllowedByDataPolicy(backend, dataPolicy) {
   if (dataPolicy === 'local') return backend.location === 'local';
@@ -207,10 +231,10 @@ export class ModelRouter {
       .filter((backend) => backendAllowedByDataPolicy(backend, route.dataPolicy))
       .sort((a, b) => (route.preferLocal ? Number(b.location === 'local') - Number(a.location === 'local') : 0) || b.priority - a.priority || a.id.localeCompare(b.id));
   }
-  async execute(operation, input, { signal, context = {}, policy = {} } = {}) {
+  async execute(operation, input, options = {}) {
     if (!MODEL_OPERATION_SET.has(operation)) throw new Error(`Unsupported model operation: ${operation}`);
+    const { signal, context: cleanContext, policy } = normalizeExecutionOptions(options);
     if (signal?.aborted) throw abortError();
-    const cleanContext = normalizeBoundedModelJsonObject(context, 'Model execution context', { maxBytes: MAX_MODEL_ROUTER_OPTIONS_BYTES });
     const attempts = [];
     const candidates = this.list(operation, policy);
     for (const backend of candidates) {

@@ -109,6 +109,38 @@ test('model router honors abort before backend invocation', async () => {
   assert.equal(called, false);
 });
 
+test('model execution options reject accessors and unknown fields before backend invocation', async () => {
+  let backendCalls = 0;
+  const router = new ModelRouter().register({ id: 'one', operations: ['plan'], invoke: async () => { backendCalls += 1; return {}; } });
+  let getterCalls = 0;
+  const options = {};
+  Object.defineProperty(options, 'context', { enumerable: true, get() { getterCalls += 1; return {}; } });
+  await assert.rejects(() => router.execute('plan', {}, options), /Model execution options must contain enumerable data fields only/);
+  assert.equal(getterCalls, 0);
+  assert.equal(backendCalls, 0);
+  await assert.rejects(() => router.execute('plan', {}, { unexpected: true }), /Unsupported model execution option: unexpected/);
+  assert.equal(backendCalls, 0);
+});
+
+test('model execution rejects forged signals without reading aborted accessors', async () => {
+  let backendCalls = 0;
+  const router = new ModelRouter().register({ id: 'one', operations: ['plan'], invoke: async () => { backendCalls += 1; return {}; } });
+  let abortedGetterCalls = 0;
+  const signal = {};
+  Object.defineProperty(signal, 'aborted', { enumerable: true, get() { abortedGetterCalls += 1; return false; } });
+  await assert.rejects(() => router.execute('plan', {}, { signal }), /Model execution signal must be an AbortSignal/);
+  assert.equal(abortedGetterCalls, 0);
+  assert.equal(backendCalls, 0);
+});
+
+test('model execution forwards a real AbortSignal unchanged after strict option normalization', async () => {
+  const controller = new AbortController();
+  let receivedSignal = null;
+  const router = new ModelRouter().register({ id: 'one', operations: ['plan'], invoke: async (_operation, _input, options) => { receivedSignal = options.signal; return {}; } });
+  await router.execute('plan', {}, { signal: controller.signal });
+  assert.equal(receivedSignal, controller.signal);
+});
+
 test('model backend validation rejects unknown operations and invalid cost tiers', () => {
   assert.throws(() => createModelBackend({ id: 'x', operations: ['teleport'], invoke() {} }), /Unsupported model operation/);
   assert.throws(() => createModelBackend({ id: 'x', operations: ['plan'], costTier: 4, invoke() {} }), /costTier/);
