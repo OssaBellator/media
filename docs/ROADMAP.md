@@ -45,6 +45,7 @@
 - exact stored render-artifact SHA-256 verification over bounded bytes/Blob/stream adapters, distinguishing storage service failure from missing, oversized or digest-mismatched artifacts;
 - bounded `media.render-worker-wire.v1` envelopes plus listener-neutral HTTP adapter with strict fields/byte limits, pre-body authorization, same-origin/CORS policy and sanitized state/artifact errors;
 - single-attempt render-worker HTTP client with strict correlated response validation and explicit unknown-delivery errors instead of automatic replay of signed worker messages;
+- runtime-neutral render-worker WebSocket server/client sessions with bounded per-connection work, request correlation, serialized sends, correlated backpressure and explicit unknown-delivery/no-retry semantics;
 - serialized Studio `ProjectJournalSession` plus `HistoryJournalSession`, wired into `app.js` for persistence-first edit/Agent/undo/redo/import/project-open recovery;
 - media import/relink Blob writes committed atomically with their graph+journal checkpoint through one IndexedDB transaction;
 - automatic compare-and-swap journal compaction in `HistoryJournalSession` at a 250-entry threshold while preserving the in-memory undo stack;
@@ -58,4 +59,4 @@
 2. platform color management, display calibration and actual HDR swap-chain/output surfaces;
 3. ship real signed native/WASM codec distributions and deployment key-management policy on top of the verified package format;
 4. larger encrypted/adaptive real-media corpus plus HLS/DASH live lab fixtures;
-5. bind collaboration resolution/session controls into the host Studio application and add host-specific WebSocket upgrade/session authorization plus administrative account/key lifecycle operations; deploy the render-worker contracts with a concrete transactional CAS datastore adapter, artifact upload/object-store `readArtifact` adapter, scheduler/worker discovery and host HTTP/WebSocket listener/TLS integration.
+5. bind collaboration resolution/session controls into the host Studio application and add host-specific WebSocket upgrade/session authorization plus administrative account/key lifecycle operations; deploy the render-worker contracts with a concrete transactional CAS datastore adapter, artifact upload/object-store `readArtifact` adapter, scheduler/worker discovery and host HTTP listener/WebSocket-upgrade/TLS integration.
