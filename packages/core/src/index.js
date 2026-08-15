@@ -68,6 +68,7 @@ export * from './webm-range.js';
 export * from './webm-mux.js';
 export * from './append-range-source.js';
 export * from './cmaf-session.js';
+export * from './cmaf-fragment-stream.js';
 export * from './encrypted-window.js';
 export * from './isobmff-encryption.js';
 export * from './isobmff-stream-finalize.js';

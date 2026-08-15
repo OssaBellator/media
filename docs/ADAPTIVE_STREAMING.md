@@ -39,7 +39,8 @@ The v2 model also preserves and acts on live-control metadata:
 - `minimumUpdatePeriod`-driven live manifest refresh before each pump when due;
 - `availabilityTimeOffset` and `availabilityTimeComplete` on media segments;
 - synchronized availability gating before live requests;
-- incremental response chunk callbacks for `availabilityTimeComplete="false"` segments before whole-segment delivery.
+- incremental response chunk callbacks for `availabilityTimeComplete="false"` segments before whole-segment delivery;
+- optional CMAF fragment assembly that emits complete `moof` + `mdat` units through `onFragment` as soon as each unit arrives, before the full HTTP segment completes.
 
 `ContentProtection` scheme/KID/PSSH values remain attached to representations. Actual CENC sample metadata/decryption is handled by the ISO-BMFF kernel.
 

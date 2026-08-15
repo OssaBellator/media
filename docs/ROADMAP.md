@@ -16,7 +16,7 @@
 
 ## Next hardening
 
-1. carry low-latency DASH chunks directly into incremental CMAF append/decode instead of exposing acquisition callbacks only;
+1. feed emitted low-latency CMAF fragment units directly into incremental demux/decode instead of stopping at the acquisition/fragment boundary;
 2. integrate temporal motion blur/vector mattes into normal Cut GPU scheduling rather than reference-only paths;
 3. platform color management, display calibration and actual HDR swap-chain/output surfaces;
 4. signed/integrity-pinned codec plugin packaging and real native/WASM codec distributions;
