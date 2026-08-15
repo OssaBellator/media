@@ -54,6 +54,14 @@ The coordinator intentionally defines no socket, HTTP route or account session. 
 
 The wire module still opens no socket. HTTP and WebSocket servers should be thin adapters around these bytes and the single `CollaborationCoordinatorSession.submit()` ingress path.
 
+## HTTP request adapter
+
+`packages/core/src/collaboration-http.js` adapts standard Web `Request` objects to the bounded wire submitter and returns standard `Response` objects. It is deliberately a handler factory, not a listener: the static Studio development server remains read-only.
+
+The adapter accepts only the configured collaboration path and `POST application/json`, rejects cross-origin requests by default, and supports explicit CORS allowlists with bounded `OPTIONS` preflight. An injected `authorizeRequest()` hook runs on the real POST before any body bytes are consumed; this is the seam for account/session or bearer-token policy and is separate from the operation-batch actor signature. Request bodies are streamed with a hard byte ceiling, response bodies inherit the wire response ceiling, and unknown application/persistence exceptions become generic 500 errors with no internal detail.
+
+Origin checks are transport hygiene, not actor authentication. Deployments still need a real administrative/account authorization system behind `authorizeRequest()` and should expose the handler only through TLS and their normal service perimeter.
+
 ## Deliberate boundary
 
 This is not yet a complete collaboration protocol. Media does **not** yet define network transport, account/session authentication, authenticated administrative enrollment UI, presence, permissions or server persistence. Key distribution/rotation and account authorization remain deployment responsibilities.
