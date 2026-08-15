@@ -54,6 +54,8 @@ For normal Studio composition playback, `DashCompositionFrameProvider` sits abov
 
 Cut fidelity mode is propagated into a request-scoped frame provider. Scrubs force a WebCodecs flush before selecting the requested adaptive frame, while continuous playback flushes only to bootstrap its first frame and then leaves the persistent decoders streaming between presentation requests. Muxed `AudioData` from DASH visual clips is routed by default to the Cut-owned `BrowserLiveAudioScheduler`; relink/full invalidation resets scheduled adaptive audio and composition shutdown closes the owned audio output. An explicitly supplied adaptive audio callback still takes ownership instead of the default scheduler.
 
+`LiveLatencyConformance` adds bounded, deterministic latency telemetry to the same path. It correlates source fragment/segment arrival, WebCodecs submission, decoded output and final video presentation/audio scheduling by variant, track and media timestamp; reports min/p50/p95/max stage distributions; records open and first-output latency; and compares the requested playhead with DASH live edge, presentation clock, recommended live position and `ServiceDescription` target latency. Budgets are opt-in rather than guessed. `DashStreamSessionV2.snapshot()` now exposes `liveEdge` and `targetLatency`, and `DashCmafLivePlaybackSession.snapshot()` includes the conformance snapshot. The checked-in fixtures use an injected clock and synthetic manifests so timing math is reproducible; real network/browser lab measurements remain a separate conformance step.
+
 `ContentProtection` scheme/KID/PSSH values remain attached to representations. Actual CENC sample metadata/decryption is handled by the ISO-BMFF kernel.
 
 ## ABR
