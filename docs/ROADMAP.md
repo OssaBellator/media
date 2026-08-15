@@ -6,6 +6,7 @@
 - DASH dynamic windows, SegmentList, SegmentBase and hierarchical `sidx` range hydration;
 - DASH v2 multi-period switching, event streams, `UTCTiming`, service-description latency, availability-time-offset gating and low-latency chunk callbacks;
 - deterministic ABR/retry/dedup and adaptive CMAF session bridges;
+- low-latency DASH CMAF fragment handoff that demuxes/indexes emitted `moof` + `mdat` units immediately per variant without double-processing the later whole HTTP segment;
 - 188-byte MPEG-TS ingest for legacy HLS with PAT/PMT, PES, timestamp unwrap, H.264/H.265 access units and AAC/ADTS reframing;
 - trusted `media.codec.v1` plugin backends and async production kernel startup;
 - display/HDR output policy applied at GPU renderer construction;
@@ -23,7 +24,7 @@
 
 ## Next hardening
 
-1. feed emitted low-latency CMAF fragment units directly into incremental demux/decode instead of stopping at the acquisition/fragment boundary;
+1. feed incrementally demuxed CMAF sample chunks into WebCodecs decode/presentation without waiting for the full HTTP segment;
 2. integrate temporal motion blur/vector mattes into normal Cut GPU scheduling rather than reference-only paths;
 3. platform color management, display calibration and actual HDR swap-chain/output surfaces;
 4. signed/integrity-pinned codec plugin packaging and real native/WASM codec distributions;

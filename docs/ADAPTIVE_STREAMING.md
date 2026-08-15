@@ -42,6 +42,8 @@ The v2 model also preserves and acts on live-control metadata:
 - incremental response chunk callbacks for `availabilityTimeComplete="false"` segments before whole-segment delivery;
 - optional CMAF fragment assembly that emits complete `moof` + `mdat` units through `onFragment` as soon as each unit arrives, before the full HTTP segment completes.
 
+`DashCmafSession` connects that acquisition boundary to the container layer. Initialization segments create independent per-variant `CmafSegmentSession` instances; each emitted low-latency `moof` + `mdat` unit is demuxed and indexed immediately, while the later whole HTTP segment callback is deliberately not demuxed a second time. Complete non-low-latency media segments use the same CMAF session path. The remaining low-latency boundary is sample decode/presentation: indexed fragment samples still need to be fed into WebCodecs as they arrive rather than waiting on a later playback path.
+
 `ContentProtection` scheme/KID/PSSH values remain attached to representations. Actual CENC sample metadata/decryption is handled by the ISO-BMFF kernel.
 
 ## ABR
