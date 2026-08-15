@@ -8,6 +8,7 @@
 - deterministic ABR/retry/dedup and adaptive CMAF session bridges;
 - low-latency DASH CMAF fragment handoff that demuxes/indexes emitted `moof` + `mdat` units immediately per variant without double-processing the later whole HTTP segment;
 - persistent per-variant/per-track WebCodecs submission from incrementally indexed CMAF fragments, with queue backpressure, init-reset handling and encrypted-sample rejection;
+- bounded decoded video/audio live queues plus playhead-driven presentation scheduling and representation-switch cleanup;
 - 188-byte MPEG-TS ingest for legacy HLS with PAT/PMT, PES, timestamp unwrap, H.264/H.265 access units and AAC/ADTS reframing;
 - trusted `media.codec.v1` plugin backends and async production kernel startup;
 - display/HDR output policy applied at GPU renderer construction;
@@ -25,7 +26,7 @@
 
 ## Next hardening
 
-1. schedule decoded low-latency video/audio output against the live playhead with bounded frame/audio queues and discontinuity-safe variant resets;
+1. bind live DASH video presentation to the normal Cut canvas/GPU surface and AudioData scheduling to an AudioContext clock with drift correction;
 2. integrate temporal motion blur/vector mattes into normal Cut GPU scheduling rather than reference-only paths;
 3. platform color management, display calibration and actual HDR swap-chain/output surfaces;
 4. signed/integrity-pinned codec plugin packaging and real native/WASM codec distributions;
