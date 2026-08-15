@@ -15,9 +15,11 @@ export class HistoryJournalSession{
     this.commitHistory=commitHistory;this.undoHistory=undoHistory;this.redoHistory=redoHistory;this.createHistory=createHistory;
     this.projectJournal=projectJournal??new ProjectJournalSession({graph:this.history.present,applyTransaction,createTransaction,persist});
     if(this.projectJournal.graph!==this.history.present)throw new Error('History and project journal graphs must match');
-    this.tail=Promise.resolve();this.metrics={edits:0,undos:0,redos:0,replacements:0,noops:0,failed:0};
+    this.tail=Promise.resolve();this.metrics={edits:0,graphCommits:0,undos:0,redos:0,replacements:0,noops:0,failed:0};
   }
   edit(label,operations,metadata={}){return this.#enqueue(async()=>{const result=await this.projectJournal.commit(label,operations,metadata);this.history=this.commitHistory(this.history,result.graph,label);this.metrics.edits++;return this.#result(result,'edit');});}
+  commitGraph(label,graph,metadata={}){if(!graph||typeof graph!=='object')return Promise.reject(new Error('History graph commit requires graph'));return this.commitGraphFactory(label,()=>graph,metadata);}
+  commitGraphFactory(label,createGraph,metadata={}){if(typeof createGraph!=='function')return Promise.reject(new Error('History graph commit requires createGraph'));return this.#enqueue(async()=>{const graph=createGraph(this.history.present);if(!graph||typeof graph!=='object')throw new Error('History graph factory must return graph');const result=await this.projectJournal.checkpoint(label,graph,{...metadata,historyAction:'commit-graph'});this.history=this.commitHistory(this.history,result.graph,label);this.metrics.graphCommits++;return this.#result(result,'commit-graph');});}
   undo(metadata={}){return this.#historyCheckpoint('undo',metadata);}
   redo(metadata={}){return this.#historyCheckpoint('redo',metadata);}
   replace(label,graph,metadata={}){if(!graph||typeof graph!=='object')return Promise.reject(new Error('History replacement requires graph'));return this.#enqueue(async()=>{const result=await this.projectJournal.checkpoint(label,graph,{...metadata,historyAction:'replace'});this.history=this.createHistory(result.graph);this.metrics.replacements++;return this.#result(result,'replace');});}
