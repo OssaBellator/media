@@ -4,7 +4,16 @@ import { createGraph } from '../src/graph.js';
 import { applyOperations } from '../src/operations.js';
 import { createCreativeObjectOperations } from '../src/creative-object.js';
 import { ModelRouter } from '../src/model-router.js';
-import { createSemanticEmbeddingIndex, embedSemanticQuery, searchSemanticEmbeddingIndex, searchSemanticHybrid } from '../src/semantic-embedding.js';
+import {
+  MAX_SEMANTIC_EMBEDDING_SCALARS,
+  createSemanticEmbeddingIndex,
+  embedSemanticQuery,
+  searchSemanticEmbeddingIndex,
+  searchSemanticHybrid,
+  semanticEmbeddingCacheKey,
+  semanticEmbeddingSourceFingerprint,
+} from '../src/semantic-embedding.js';
+import { MAX_SEMANTIC_QUERY_CHARS } from '../src/semantic-search.js';
 
 function embedRouter(seen = []) {
   return new ModelRouter().register({ id: 'embedder', operations: ['embed'], invoke: async (_operation, input) => {
@@ -119,4 +128,57 @@ test('embedding backend output rejects unknown fields and unsafe metadata before
   const unsafeMetadata = new ModelRouter().register({ id: 'metadata-getter', operations: ['embed'], invoke: async () => ({ vectors: [[1]], metadata }) });
   await assert.rejects(() => createSemanticEmbeddingIndex(graph, unsafeMetadata, { maxDocuments: 1 }), /Embedding backend output objects must contain enumerable data properties only/);
   assert.equal(metadataGetterCalls, 0);
+});
+
+test('semantic embedding creation rejects accessor and coercive options before backend invocation', async () => {
+  const graph = createGraph('Film');
+  let backendCalls = 0;
+  const router = new ModelRouter().register({ id: 'embedder', operations: ['embed'], invoke: async (_operation, input) => { backendCalls += 1; return { vectors: input.texts.map(() => [1]) }; } });
+  let getterCalls = 0;
+  const options = {};
+  Object.defineProperty(options, 'maxDocuments', { enumerable: true, get() { getterCalls += 1; return 1; } });
+  await assert.rejects(() => createSemanticEmbeddingIndex(graph, router, options), /create options must contain enumerable data fields only/);
+  assert.equal(getterCalls, 0);
+  assert.equal(backendCalls, 0);
+  await assert.rejects(() => createSemanticEmbeddingIndex(graph, router, { maxDocuments: '1' }), /maxDocuments must be an integer/);
+  await assert.rejects(() => createSemanticEmbeddingIndex(graph, router, { batchSize: 257 }), /batchSize must be an integer between 1 and 256/);
+  await assert.rejects(() => createSemanticEmbeddingIndex(graph, router, { maxScalars: MAX_SEMANTIC_EMBEDDING_SCALARS + 1 }), /maxScalars must be an integer/);
+  assert.equal(backendCalls, 0);
+});
+
+test('semantic embedding kinds and cache identities reject implicit coercion', () => {
+  const graph = createGraph('Film');
+  let coercions = 0;
+  const forged = { toString() { coercions += 1; return 'project'; } };
+  assert.throws(() => semanticEmbeddingSourceFingerprint(graph, { kinds: [forged] }), /Semantic embedding kind must be a non-empty string/);
+  assert.equal(coercions, 0);
+
+  let getterCalls = 0;
+  const keyOptions = { sourceFingerprint: 'source', backendId: 'backend' };
+  Object.defineProperty(keyOptions, 'projectId', { enumerable: true, get() { getterCalls += 1; return graph.projectId; } });
+  assert.throws(() => semanticEmbeddingCacheKey(keyOptions), /cache key options must contain enumerable data fields only/);
+  assert.equal(getterCalls, 0);
+});
+
+test('semantic embedding search and hybrid ranking reject coercive numeric options', async () => {
+  const graph = createGraph('Film');
+  const index = await createSemanticEmbeddingIndex(graph, embedRouter(), { maxDocuments: 1 });
+  assert.throws(() => searchSemanticEmbeddingIndex(index, index.documents[0].vector, { limit: '1' }), /search limit must be an integer/);
+  assert.throws(() => searchSemanticEmbeddingIndex(index, index.documents[0].vector, { minimumScore: '0' }), /minimumScore must be a finite number/);
+  assert.throws(() => searchSemanticHybrid(graph, index, 'Film', index.documents[0].vector, { lexicalWeight: '1' }), /lexicalWeight must be a finite number/);
+  assert.throws(() => searchSemanticHybrid(graph, index, 'Film', index.documents[0].vector, { embeddingWeight: -1 }), /embeddingWeight must be a finite number/);
+});
+
+test('semantic embedding query validates options and text before model routing', async () => {
+  const graph = createGraph('Film');
+  const index = await createSemanticEmbeddingIndex(graph, embedRouter(), { maxDocuments: 1 });
+  let backendCalls = 0;
+  const router = new ModelRouter().register({ id: index.backendId, operations: ['embed'], invoke: async () => { backendCalls += 1; return { vectors: [[1, 0, 0]] }; } });
+  let coercions = 0;
+  const forged = { toString() { coercions += 1; return 'Film'; } };
+  await assert.rejects(() => embedSemanticQuery(router, index, forged), /query must be a string/);
+  assert.equal(coercions, 0);
+  await assert.rejects(() => embedSemanticQuery(router, index, 'x'.repeat(MAX_SEMANTIC_QUERY_CHARS + 1)), /query exceeds 4096 characters/);
+  await assert.rejects(() => embedSemanticQuery(router, index, 'Film', { limit: '1' }), /query limit must be an integer/);
+  assert.equal(backendCalls, 0);
 });

@@ -2,7 +2,14 @@ import { normalizeBoundedModelInput, normalizeBoundedModelJsonObject } from './m
 import { normalizeModelRoutingPolicy } from './model-router.js';
 import { operationLogChecksum } from './operation-log.js';
 import { createPlannerSnapshot } from './providers.js';
-import { createSemanticIndex, searchSemanticGraph } from './semantic-search.js';
+import {
+  MAX_SEMANTIC_KIND_CHARS,
+  MAX_SEMANTIC_KIND_FILTERS,
+  MAX_SEMANTIC_QUERY_CHARS,
+  MAX_SEMANTIC_SEARCH_RESULTS,
+  createSemanticIndex,
+  searchSemanticGraph,
+} from './semantic-search.js';
 
 export const SEMANTIC_EMBEDDING_INDEX_SCHEMA = 'media.semantic-embedding-index.v1';
 export const MAX_SEMANTIC_EMBEDDING_DIMENSIONS = 4096;
@@ -16,6 +23,13 @@ const MAX_EMBED_OUTPUT_BYTES = 16 * 1024 * 1024;
 const MAX_EMBED_OUTPUT_ENTRIES = 1_100_000;
 const MAX_EMBED_METADATA_BYTES = 64 * 1024;
 const EMBED_OUTPUT_KEYS = new Set(['vectors', 'metadata']);
+const SOURCE_OPTION_KEYS = new Set(['kinds']);
+const CACHE_KEY_OPTION_KEYS = new Set(['projectId', 'sourceFingerprint', 'backendId', 'kinds']);
+const INDEX_EXPECTATION_KEYS = new Set(['projectId', 'sourceFingerprint', 'backendId']);
+const CREATE_OPTION_KEYS = new Set(['policy', 'kinds', 'maxDocuments', 'maxScalars', 'batchSize', 'signal']);
+const SEARCH_OPTION_KEYS = new Set(['limit', 'kinds', 'minimumScore']);
+const QUERY_OPTION_KEYS = new Set(['policy', 'signal', 'limit', 'kinds', 'minimumScore']);
+const HYBRID_OPTION_KEYS = new Set(['limit', 'kinds', 'lexicalWeight', 'embeddingWeight']);
 
 function requireRouter(router) {
   if (!router || typeof router.execute !== 'function') throw new Error('Semantic embedding requires a model router');
@@ -25,14 +39,42 @@ function requireString(value, label) {
   if (typeof value !== 'string' || !value.trim()) throw new Error(`${label} must be a non-empty string`);
   return value.trim();
 }
-function positiveInt(value, fallback, max) {
-  const number = Math.floor(Number(value));
-  return Number.isFinite(number) && number > 0 ? Math.min(number, max) : fallback;
+function dataOptions(value, label, allowedKeys) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${label} must be a plain data object`);
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) throw new Error(`${label} must be a plain data object`);
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  const clean = {};
+  for (const key of Reflect.ownKeys(descriptors)) {
+    if (typeof key !== 'string' || !allowedKeys.has(key)) throw new Error(`Unsupported ${label} field: ${String(key)}`);
+    const descriptor = descriptors[key];
+    if (!descriptor.enumerable || !Object.hasOwn(descriptor, 'value')) throw new Error(`${label} must contain enumerable data fields only`);
+    Object.defineProperty(clean, key, { value: descriptor.value, enumerable: true, writable: true, configurable: true });
+  }
+  return clean;
+}
+function boundedInteger(value, label, fallback, max) {
+  if (value === undefined) return fallback;
+  if (!Number.isInteger(value) || value < 1 || value > max) throw new Error(`${label} must be an integer between 1 and ${max}`);
+  return value;
+}
+function finiteNumber(value, label, fallback, min = -Infinity, max = Infinity) {
+  if (value === undefined) return fallback;
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < min || value > max) throw new Error(`${label} must be a finite number between ${min} and ${max}`);
+  return value;
 }
 function normalizeKinds(kinds) {
   if (kinds == null) return null;
-  if (!Array.isArray(kinds)) throw new Error('Semantic embedding kinds must be an array');
-  return [...new Set(kinds.map((kind) => requireString(String(kind), 'Semantic embedding kind')))].sort();
+  if (!Array.isArray(kinds) || kinds.length > MAX_SEMANTIC_KIND_FILTERS) throw new Error(`Semantic embedding kinds must be an array with at most ${MAX_SEMANTIC_KIND_FILTERS} entries`);
+  const normalized = [];
+  for (let index = 0; index < kinds.length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(kinds, String(index));
+    if (!descriptor?.enumerable || !Object.hasOwn(descriptor, 'value')) throw new Error('Semantic embedding kinds must contain enumerable data values only');
+    const kind = requireString(descriptor.value, 'Semantic embedding kind');
+    if (kind.length > MAX_SEMANTIC_KIND_CHARS) throw new Error(`Semantic embedding kind exceeds ${MAX_SEMANTIC_KIND_CHARS} characters`);
+    normalized.push(kind);
+  }
+  return [...new Set(normalized)].sort();
 }
 function embeddingText(document) {
   const terms = Object.keys(document.terms ?? {}).slice(0, 256).join(' ');
@@ -43,7 +85,7 @@ function embeddingSource(graph, kinds) {
   const lexical = createSemanticIndex(safeGraph, { kinds });
   const payload = {
     schema: SEMANTIC_EMBEDDING_SOURCE_SCHEMA,
-    projectId: requireString(String(graph?.projectId ?? ''), 'Semantic embedding projectId'),
+    projectId: requireString(graph?.projectId, 'Semantic embedding projectId'),
     kinds,
     documents: lexical.documents.map((document) => ({
       id: document.id,
@@ -89,23 +131,32 @@ function cosine(a, b) {
   return dot / Math.sqrt(aa * bb);
 }
 
-export function semanticEmbeddingSourceFingerprint(graph, { kinds = null } = {}) {
-  const normalizedKinds = normalizeKinds(kinds);
+export function semanticEmbeddingSourceFingerprint(graph, options = {}) {
+  const config = dataOptions(options, 'Semantic embedding source options', SOURCE_OPTION_KEYS);
+  const normalizedKinds = normalizeKinds(config.kinds ?? null);
   return embeddingSource(graph, normalizedKinds).sourceFingerprint;
 }
 
-export function semanticEmbeddingCacheKey({ projectId, sourceFingerprint, backendId, kinds = null } = {}) {
+export function semanticEmbeddingCacheKey(options = {}) {
+  const config = dataOptions(options, 'Semantic embedding cache key options', CACHE_KEY_OPTION_KEYS);
   const payload = {
     schema: SEMANTIC_EMBEDDING_CACHE_SCHEMA,
-    projectId: requireString(projectId, 'Semantic embedding cache projectId'),
-    sourceFingerprint: requireString(sourceFingerprint, 'Semantic embedding cache source fingerprint'),
-    backendId: requireString(backendId, 'Semantic embedding cache backend id'),
-    kinds: normalizeKinds(kinds),
+    projectId: requireString(config.projectId, 'Semantic embedding cache projectId'),
+    sourceFingerprint: requireString(config.sourceFingerprint, 'Semantic embedding cache source fingerprint'),
+    backendId: requireString(config.backendId, 'Semantic embedding cache backend id'),
+    kinds: normalizeKinds(config.kinds ?? null),
   };
   return `semantic-embedding:${operationLogChecksum(payload)}`;
 }
 
-export function assertSemanticEmbeddingIndex(index, { projectId = null, sourceFingerprint = null, backendId = null } = {}) {
+export function assertSemanticEmbeddingIndex(index, options = {}) {
+  const config = dataOptions(options, 'Semantic embedding index expectations', INDEX_EXPECTATION_KEYS);
+  const projectId = config.projectId ?? null;
+  const sourceFingerprint = config.sourceFingerprint ?? null;
+  const backendId = config.backendId ?? null;
+  if (projectId != null) requireString(projectId, 'Expected semantic embedding projectId');
+  if (sourceFingerprint != null) requireString(sourceFingerprint, 'Expected semantic embedding source fingerprint');
+  if (backendId != null) requireString(backendId, 'Expected semantic embedding backend id');
   if (!index || typeof index !== 'object' || Array.isArray(index) || index.schema !== SEMANTIC_EMBEDDING_INDEX_SCHEMA) throw new Error('A valid semantic embedding index is required');
   requireString(index.projectId, 'Semantic embedding index projectId');
   requireString(index.sourceFingerprint, 'Semantic embedding index source fingerprint');
@@ -141,19 +192,15 @@ export function assertSemanticEmbeddingIndex(index, { projectId = null, sourceFi
   return index;
 }
 
-export async function createSemanticEmbeddingIndex(graph, router, {
-  policy = {},
-  kinds = null,
-  maxDocuments = 1024,
-  maxScalars = MAX_SEMANTIC_EMBEDDING_SCALARS,
-  batchSize = DEFAULT_BATCH_SIZE,
-  signal,
-} = {}) {
+export async function createSemanticEmbeddingIndex(graph, router, options = {}) {
   requireRouter(router);
-  const normalizedKinds = normalizeKinds(kinds);
-  const documentLimit = positiveInt(maxDocuments, 1024, MAX_SEMANTIC_EMBEDDING_DOCUMENTS);
-  const scalarLimit = positiveInt(maxScalars, MAX_SEMANTIC_EMBEDDING_SCALARS, MAX_SEMANTIC_EMBEDDING_SCALARS);
-  const size = positiveInt(batchSize, DEFAULT_BATCH_SIZE, 256);
+  const config = dataOptions(options, 'Semantic embedding create options', CREATE_OPTION_KEYS);
+  const normalizedKinds = normalizeKinds(config.kinds ?? null);
+  const documentLimit = boundedInteger(config.maxDocuments, 'Semantic embedding maxDocuments', 1024, MAX_SEMANTIC_EMBEDDING_DOCUMENTS);
+  const scalarLimit = boundedInteger(config.maxScalars, 'Semantic embedding maxScalars', MAX_SEMANTIC_EMBEDDING_SCALARS, MAX_SEMANTIC_EMBEDDING_SCALARS);
+  const size = boundedInteger(config.batchSize, 'Semantic embedding batchSize', DEFAULT_BATCH_SIZE, 256);
+  const policy = normalizeModelRoutingPolicy(config.policy ?? {});
+  const signal = config.signal;
   const source = embeddingSource(graph, normalizedKinds);
   const sourceDocuments = source.lexical.documents.slice(0, documentLimit);
   const documents = [];
@@ -186,13 +233,15 @@ export async function createSemanticEmbeddingIndex(graph, router, {
   });
 }
 
-export function searchSemanticEmbeddingIndex(index, queryVector, { limit = 20, kinds = null, minimumScore = -1 } = {}) {
+export function searchSemanticEmbeddingIndex(index, queryVector, options = {}) {
   assertSemanticEmbeddingIndex(index);
+  const config = dataOptions(options, 'Semantic embedding search options', SEARCH_OPTION_KEYS);
   if (!index.dimensions) return [];
   const query = validateVector(queryVector, index.dimensions);
-  const allowed = kinds == null ? null : new Set(kinds.map(String));
-  const maxResults = positiveInt(limit, 20, 200);
-  const threshold = Number.isFinite(Number(minimumScore)) ? Number(minimumScore) : -1;
+  const normalizedKinds = normalizeKinds(config.kinds ?? null);
+  const allowed = normalizedKinds == null ? null : new Set(normalizedKinds);
+  const maxResults = boundedInteger(config.limit, 'Semantic embedding search limit', 20, MAX_SEMANTIC_SEARCH_RESULTS);
+  const threshold = finiteNumber(config.minimumScore, 'Semantic embedding minimumScore', -1, -1, 1);
   return index.documents
     .filter((document) => !allowed || allowed.has(document.kind))
     .map((document) => ({ id: document.id, kind: document.kind, name: document.name, score: cosine(query, validateVector(document.vector, index.dimensions)) }))
@@ -201,33 +250,44 @@ export function searchSemanticEmbeddingIndex(index, queryVector, { limit = 20, k
     .slice(0, maxResults);
 }
 
-export async function embedSemanticQuery(router, index, query, { policy = {}, signal, limit = 20, kinds = null, minimumScore = -1 } = {}) {
+export async function embedSemanticQuery(router, index, query, options = {}) {
   requireRouter(router);
   assertSemanticEmbeddingIndex(index);
-  if (typeof query !== 'string' || !query.trim()) return [];
-  const cleanPolicy = normalizeModelRoutingPolicy(policy);
+  const config = dataOptions(options, 'Semantic embedding query options', QUERY_OPTION_KEYS);
+  if (typeof query !== 'string') throw new Error('Semantic embedding query must be a string');
+  if (query.length > MAX_SEMANTIC_QUERY_CHARS) throw new Error(`Semantic embedding query exceeds ${MAX_SEMANTIC_QUERY_CHARS} characters`);
+  if (!query.trim()) return [];
+  const cleanPolicy = normalizeModelRoutingPolicy(config.policy ?? {});
+  const signal = config.signal;
+  const limit = boundedInteger(config.limit, 'Semantic embedding query limit', 20, MAX_SEMANTIC_SEARCH_RESULTS);
+  const kinds = normalizeKinds(config.kinds ?? null);
+  const minimumScore = finiteNumber(config.minimumScore, 'Semantic embedding query minimumScore', -1, -1, 1);
   const callerAllowed = cleanPolicy.allowedBackendIds == null ? null : new Set(cleanPolicy.allowedBackendIds);
   const queryPolicy = index.backendId
     ? { ...cleanPolicy, allowedBackendIds: callerAllowed == null || callerAllowed.has(index.backendId) ? [index.backendId] : [] }
     : cleanPolicy;
-  const routed = await router.execute('embed', { texts: [query.trim().slice(0, MAX_DOCUMENT_TEXT_CHARS)] }, { signal, policy: queryPolicy, context: { purpose: 'semantic-query', projectId: index.projectId } });
+  const routed = await router.execute('embed', { texts: [query.trim()] }, { signal, policy: queryPolicy, context: { purpose: 'semantic-query', projectId: index.projectId } });
   if (index.backendId && routed.backendId !== index.backendId) throw new Error(`Semantic query backend ${routed.backendId} does not match index backend ${index.backendId}`);
   const normalized = normalizeEmbedOutput(routed.output, 1, index.dimensions);
   return searchSemanticEmbeddingIndex(index, normalized.vectors[0], { limit, kinds, minimumScore }).map((result) => ({ ...result, backendId: routed.backendId }));
 }
 
-export function searchSemanticHybrid(graph, embeddingIndex, query, queryVector, { limit = 20, kinds = null, lexicalWeight = 1, embeddingWeight = 1 } = {}) {
-  const maxResults = positiveInt(limit, 20, 200);
-  const lexical = searchSemanticGraph(graph, query, { limit: Math.min(200, maxResults * 4), kinds });
-  const embedded = searchSemanticEmbeddingIndex(embeddingIndex, queryVector, { limit: Math.min(200, maxResults * 4), kinds });
+export function searchSemanticHybrid(graph, embeddingIndex, query, queryVector, options = {}) {
+  const config = dataOptions(options, 'Semantic hybrid search options', HYBRID_OPTION_KEYS);
+  const maxResults = boundedInteger(config.limit, 'Semantic hybrid search limit', 20, MAX_SEMANTIC_SEARCH_RESULTS);
+  const kinds = normalizeKinds(config.kinds ?? null);
+  const lexicalWeight = finiteNumber(config.lexicalWeight, 'Semantic hybrid lexicalWeight', 1, 0);
+  const embeddingWeight = finiteNumber(config.embeddingWeight, 'Semantic hybrid embeddingWeight', 1, 0);
+  const lexical = searchSemanticGraph(graph, query, { limit: Math.min(MAX_SEMANTIC_SEARCH_RESULTS, maxResults * 4), kinds });
+  const embedded = searchSemanticEmbeddingIndex(embeddingIndex, queryVector, { limit: Math.min(MAX_SEMANTIC_SEARCH_RESULTS, maxResults * 4), kinds });
   const scores = new Map();
   const metadata = new Map();
   lexical.forEach((result, index) => {
-    scores.set(result.id, (scores.get(result.id) ?? 0) + Number(lexicalWeight) / (60 + index + 1));
+    scores.set(result.id, (scores.get(result.id) ?? 0) + lexicalWeight / (60 + index + 1));
     metadata.set(result.id, { id: result.id, kind: result.kind, name: result.name });
   });
   embedded.forEach((result, index) => {
-    scores.set(result.id, (scores.get(result.id) ?? 0) + Number(embeddingWeight) / (60 + index + 1));
+    scores.set(result.id, (scores.get(result.id) ?? 0) + embeddingWeight / (60 + index + 1));
     metadata.set(result.id, { id: result.id, kind: result.kind, name: result.name });
   });
   return [...scores.entries()].map(([id, score]) => ({ ...metadata.get(id), score })).sort((a, b) => b.score - a.score || a.name.localeCompare(b.name) || a.id.localeCompare(b.id)).slice(0, maxResults);
