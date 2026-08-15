@@ -116,3 +116,12 @@ test('model-router workflow planning honors abort before backend invocation', as
   await assert.rejects(() => proposeAgentWorkflowWithProvider(provider, graph, 'delegate', {}, { signal: controller.signal }), (error) => error?.name === 'AbortError');
   assert.equal(calls, 0);
 });
+
+
+test('workflow planner result normalization rejects accessors without executing them', () => {
+  let getterCalls = 0;
+  const result = { summary: 'safe', operations: [] };
+  Object.defineProperty(result, 'tasks', { enumerable: true, get() { getterCalls += 1; return []; } });
+  assert.throws(() => assertWorkflowPlannerResult(result), /Workflow planner result must be JSON-safe/i);
+  assert.equal(getterCalls, 0);
+});

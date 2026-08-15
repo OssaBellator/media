@@ -108,3 +108,19 @@ test('routed semantic enrichment uses privacy-redacted source context and record
   assert.equal(object.props.provenance.backendId, 'vision');
   assert.deepEqual(object.props.provenance.sourceNodeIds, ['source']);
 });
+
+
+test('semantic enrichment output normalization rejects accessors without executing them', () => {
+  const graph = createGraph('Accessor output');
+  let rootGetterCalls = 0;
+  const root = {};
+  Object.defineProperty(root, 'objects', { enumerable: true, get() { rootGetterCalls += 1; return []; } });
+  assert.throws(() => createSemanticEnrichmentOperations(graph, root), /Semantic enrichment must be JSON-safe/i);
+  assert.equal(rootGetterCalls, 0);
+
+  let nestedGetterCalls = 0;
+  const entry = { objectType: 'person' };
+  Object.defineProperty(entry, 'name', { enumerable: true, get() { nestedGetterCalls += 1; return 'Maya'; } });
+  assert.throws(() => createSemanticEnrichmentOperations(graph, { objects: [entry] }), /Semantic enrichment must be JSON-safe/i);
+  assert.equal(nestedGetterCalls, 0);
+});

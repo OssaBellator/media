@@ -118,3 +118,20 @@ test("HTTP planner rejects non-success responses", async () => {
   const provider = createHttpPlannerProvider({ endpoint: "https://planner.example/v1/plan", fetchImpl: async () => ({ ok: false, status: 429 }) });
   await assert.rejects(() => planWithProvider(provider, createMediaProject(), "edit"), /HTTP 429/);
 });
+
+
+test("planner result normalization rejects accessors without executing them", async () => {
+  let rootGetterCalls = 0;
+  const root = { operations: [] };
+  Object.defineProperty(root, "summary", { enumerable: true, get() { rootGetterCalls += 1; return "unsafe"; } });
+  const rootProvider = createPlannerProvider({ id: "root-accessor", plan: async () => root });
+  await assert.rejects(() => planWithProvider(rootProvider, createMediaProject(), "inspect"), /Planner result must be JSON-safe/i);
+  assert.equal(rootGetterCalls, 0);
+
+  let nestedGetterCalls = 0;
+  const operation = { nodeId: "project" };
+  Object.defineProperty(operation, "type", { enumerable: true, get() { nestedGetterCalls += 1; return "node.update"; } });
+  const nestedProvider = createPlannerProvider({ id: "nested-accessor", plan: async () => ({ summary: "unsafe", operations: [operation] }) });
+  await assert.rejects(() => planWithProvider(nestedProvider, createMediaProject(), "inspect"), /Planner result must be JSON-safe/i);
+  assert.equal(nestedGetterCalls, 0);
+});

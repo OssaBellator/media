@@ -43,18 +43,19 @@ function requireWorkflowProvider(provider) {
 
 export function assertPlannerResult(result, { maxResultBytes = DEFAULT_PLANNER_RESULT_BYTES } = {}) {
   if (!result || typeof result !== "object" || Array.isArray(result)) throw new Error("Planner result must be an object");
-  if (typeof result.summary !== "string") throw new Error("Planner result requires a summary");
-  if (result.summary.length > MAX_PLANNER_SUMMARY_CHARS) throw new Error(`Planner result summary exceeds ${MAX_PLANNER_SUMMARY_CHARS} characters`);
-  if (!Array.isArray(result.operations)) throw new Error("Planner result requires an operations array");
-  if (result.operations.length > MAX_PLANNER_OPERATIONS) throw new Error(`Planner result exceeds ${MAX_PLANNER_OPERATIONS} operations`);
-  result.operations.forEach(assertValidOperation);
-  const normalized = { summary: result.summary, operations: result.operations };
-  if (result.metadata !== undefined) {
-    if (!result.metadata || typeof result.metadata !== "object" || Array.isArray(result.metadata)) throw new Error("Planner result metadata must be an object");
-    normalized.metadata = result.metadata;
+  const byteLimit = boundedPositive(maxResultBytes, DEFAULT_PLANNER_RESULT_BYTES);
+  const clean = normalizeBoundedModelJsonObject(result, "Planner result", { maxBytes: byteLimit });
+  if (typeof clean.summary !== "string") throw new Error("Planner result requires a summary");
+  if (clean.summary.length > MAX_PLANNER_SUMMARY_CHARS) throw new Error(`Planner result summary exceeds ${MAX_PLANNER_SUMMARY_CHARS} characters`);
+  if (!Array.isArray(clean.operations)) throw new Error("Planner result requires an operations array");
+  if (clean.operations.length > MAX_PLANNER_OPERATIONS) throw new Error(`Planner result exceeds ${MAX_PLANNER_OPERATIONS} operations`);
+  clean.operations.forEach(assertValidOperation);
+  const normalized = { summary: clean.summary, operations: clean.operations };
+  if (clean.metadata !== undefined) {
+    if (!clean.metadata || typeof clean.metadata !== "object" || Array.isArray(clean.metadata)) throw new Error("Planner result metadata must be an object");
+    normalized.metadata = clean.metadata;
   }
   const canonical = canonicalOperationLogJson(normalized);
-  const byteLimit = boundedPositive(maxResultBytes, DEFAULT_PLANNER_RESULT_BYTES);
   if (utf8Bytes(canonical) > byteLimit) throw new Error(`Planner result exceeds ${byteLimit} bytes`);
   return JSON.parse(canonical);
 }
@@ -65,12 +66,13 @@ export function createPlannerProvider({ id, label = id, capabilities = ["plan"],
 
 export function assertWorkflowPlannerResult(result, { maxResultBytes = MAX_AGENT_WORKFLOW_BYTES } = {}) {
   if (!result || typeof result !== "object" || Array.isArray(result)) throw new Error("Workflow planner result must be an object");
-  const planner = assertPlannerResult({ summary: result.summary, operations: result.operations, ...(result.metadata !== undefined ? { metadata: result.metadata } : {}) }, { maxResultBytes });
-  if (!Array.isArray(result.tasks)) throw new Error("Workflow planner result requires a tasks array");
-  if (result.tasks.length > MAX_AGENT_WORKFLOW_TASKS) throw new Error(`Workflow planner result exceeds ${MAX_AGENT_WORKFLOW_TASKS} tasks`);
-  const normalized = { ...planner, tasks: result.tasks };
-  const canonical = canonicalOperationLogJson(normalized);
   const byteLimit = boundedPositive(maxResultBytes, MAX_AGENT_WORKFLOW_BYTES);
+  const clean = normalizeBoundedModelJsonObject(result, "Workflow planner result", { maxBytes: byteLimit });
+  const planner = assertPlannerResult({ summary: clean.summary, operations: clean.operations, ...(clean.metadata !== undefined ? { metadata: clean.metadata } : {}) }, { maxResultBytes: byteLimit });
+  if (!Array.isArray(clean.tasks)) throw new Error("Workflow planner result requires a tasks array");
+  if (clean.tasks.length > MAX_AGENT_WORKFLOW_TASKS) throw new Error(`Workflow planner result exceeds ${MAX_AGENT_WORKFLOW_TASKS} tasks`);
+  const normalized = { ...planner, tasks: clean.tasks };
+  const canonical = canonicalOperationLogJson(normalized);
   if (utf8Bytes(canonical) > byteLimit) throw new Error(`Workflow planner result exceeds ${byteLimit} bytes`);
   return JSON.parse(canonical);
 }

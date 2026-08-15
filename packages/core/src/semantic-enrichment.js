@@ -46,11 +46,13 @@ function normalizeModelSourceIds(values) {
 
 export function assertSemanticEnrichment(result, { maxBytes = MAX_SEMANTIC_ENRICHMENT_BYTES } = {}) {
   if (!result || typeof result !== 'object' || Array.isArray(result)) throw new Error('Semantic enrichment must be an object');
-  if (result.schema !== undefined && result.schema !== SEMANTIC_ENRICHMENT_SCHEMA) throw new Error(`Unsupported semantic enrichment schema: ${result.schema}`);
-  if (!Array.isArray(result.objects)) throw new Error('Semantic enrichment requires an objects array');
-  if (result.objects.length > MAX_SEMANTIC_ENRICHMENT_OBJECTS) throw new Error(`Semantic enrichment exceeds ${MAX_SEMANTIC_ENRICHMENT_OBJECTS} objects`);
+  const limit = Math.max(1024, Math.floor(Number(maxBytes) || MAX_SEMANTIC_ENRICHMENT_BYTES));
+  const clean = normalizeBoundedModelJsonObject(result, 'Semantic enrichment', { maxBytes: limit });
+  if (clean.schema !== undefined && clean.schema !== SEMANTIC_ENRICHMENT_SCHEMA) throw new Error(`Unsupported semantic enrichment schema: ${clean.schema}`);
+  if (!Array.isArray(clean.objects)) throw new Error('Semantic enrichment requires an objects array');
+  if (clean.objects.length > MAX_SEMANTIC_ENRICHMENT_OBJECTS) throw new Error(`Semantic enrichment exceeds ${MAX_SEMANTIC_ENRICHMENT_OBJECTS} objects`);
   let relationshipCount = 0;
-  for (const [index, object] of result.objects.entries()) {
+  for (const [index, object] of clean.objects.entries()) {
     if (!object || typeof object !== 'object' || Array.isArray(object)) throw new Error(`Semantic enrichment object ${index} must be an object`);
     requireString(object.name ?? object.objectType, `Semantic enrichment object ${index} name`);
     requireString(object.objectType, `Semantic enrichment object ${index} type`);
@@ -60,8 +62,7 @@ export function assertSemanticEnrichment(result, { maxBytes = MAX_SEMANTIC_ENRIC
     relationshipCount += object.relationships?.length ?? 0;
   }
   if (relationshipCount > MAX_SEMANTIC_ENRICHMENT_RELATIONSHIPS) throw new Error(`Semantic enrichment exceeds ${MAX_SEMANTIC_ENRICHMENT_RELATIONSHIPS} relationships`);
-  const canonical = canonicalOperationLogJson({ schema: SEMANTIC_ENRICHMENT_SCHEMA, objects: result.objects });
-  const limit = Math.max(1024, Math.floor(Number(maxBytes) || MAX_SEMANTIC_ENRICHMENT_BYTES));
+  const canonical = canonicalOperationLogJson({ schema: SEMANTIC_ENRICHMENT_SCHEMA, objects: clean.objects });
   if (utf8Bytes(canonical) > limit) throw new Error(`Semantic enrichment exceeds ${limit} bytes`);
   return JSON.parse(canonical);
 }
