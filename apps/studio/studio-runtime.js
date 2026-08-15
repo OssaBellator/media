@@ -63,6 +63,7 @@ import { createCutPlaybackRuntime } from "./cut-playback-runtime.js";
 import { createCompositionDeliveryRuntime } from "./composition-delivery-runtime.js";
 import { BrowserAudioMixer } from "./audio-engine.js";
 import { HistoryJournalSession, recoverHistoryJournalSession } from "./history-journal-session.js";
+import { registerStudioAgentReviewSession } from "./agent-review-bridge.js";
 import { registerStudioCommitProvider, registerStudioGraphProvider, registerStudioNodeSelector } from "./studio-services.js";
 import { findStoredAssetByHash, loadAssetBlob, loadStoredGraph, loadStoredOperationRecovery, localAssetUri, saveAssetBlob, saveStoredGraph, saveStoredGraphWithOperation, saveStoredGraphWithOperationAndAssets } from "./storage.js";
 
@@ -879,6 +880,7 @@ async function bootstrap() {
     activity[0] = { title: "Recovery unavailable", detail: error.message, operations: [] };
     await hydrateAssetUrls().catch(() => 0);
   }
+  registerStudioAgentReviewSession(historyJournal);
   syncTransport(); render();
 }
 
