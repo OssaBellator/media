@@ -37,6 +37,7 @@ export * from './collaboration-websocket-client.js';
 export * from './collaboration-client.js';
 export * from './collaboration-resolution.js';
 export * from './collaboration-resolution-decisions.js';
+export * from './collaboration-resolution-batch.js';
 export * from './trust-registry.js';
 export * from './trusted-transition.js';
 export * from './planner.js';
