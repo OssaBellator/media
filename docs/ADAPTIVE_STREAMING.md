@@ -36,6 +36,7 @@ The v2 model also preserves and acts on live-control metadata:
 - `EventStream` presentation times normalized onto the global timeline;
 - `UTCTiming` direct, HTTP HEAD and HTTP body clock synchronization;
 - `ServiceDescription` latency/playback-rate targets;
+- `minimumUpdatePeriod`-driven live manifest refresh before each pump when due;
 - `availabilityTimeOffset` and `availabilityTimeComplete` on media segments;
 - synchronized availability gating before live requests;
 - incremental response chunk callbacks for `availabilityTimeComplete="false"` segments before whole-segment delivery.
