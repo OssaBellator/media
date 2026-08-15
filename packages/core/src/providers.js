@@ -10,6 +10,7 @@ export const MAX_PLANNER_SUMMARY_CHARS = 4096;
 export const MAX_PLANNER_INTENT_CHARS = 16_384;
 export const DEFAULT_PLANNER_RESULT_BYTES = 2 * 1024 * 1024;
 export const DEFAULT_PLANNER_REQUEST_BYTES = 4 * 1024 * 1024;
+export const DEFAULT_PLANNER_CONTEXT_BYTES = 64 * 1024;
 
 function utf8Bytes(text) { return new TextEncoder().encode(text).byteLength; }
 export function normalizePlannerIntent(intent, label = "Planner intent") {
@@ -17,6 +18,15 @@ export function normalizePlannerIntent(intent, label = "Planner intent") {
   const clean = intent.trim();
   if (clean.length > MAX_PLANNER_INTENT_CHARS) throw new Error(`${label} exceeds ${MAX_PLANNER_INTENT_CHARS} characters`);
   return clean;
+}
+export function normalizePlannerContext(context = {}, { maxContextBytes = DEFAULT_PLANNER_CONTEXT_BYTES } = {}) {
+  if (!context || typeof context !== "object" || Array.isArray(context)) throw new Error("Planner context must be an object");
+  let canonical;
+  try { canonical = canonicalOperationLogJson(context); }
+  catch (error) { throw new Error(`Planner context must be JSON-safe: ${error.message}`, { cause: error }); }
+  const byteLimit = boundedPositive(maxContextBytes, DEFAULT_PLANNER_CONTEXT_BYTES);
+  if (utf8Bytes(canonical) > byteLimit) throw new Error(`Planner context exceeds ${byteLimit} bytes`);
+  return JSON.parse(canonical);
 }
 function boundedPositive(value, fallback, minimum = 256) {
   const number = Number(value);
@@ -76,8 +86,9 @@ export function createWorkflowPlannerProvider({ id, label = id, capabilities = [
 export async function proposeAgentWorkflowWithProvider(provider, graph, intent, context = {}, options = {}) {
   const valid = requireWorkflowProvider(provider);
   const cleanIntent = normalizePlannerIntent(intent, "Workflow planner intent");
-  const { signal, ...validationOptions } = options;
-  const result = assertWorkflowPlannerResult(await valid.proposeWorkflow({ graph, intent: cleanIntent, context, signal }), validationOptions);
+  const { signal, maxContextBytes, ...validationOptions } = options;
+  const cleanContext = normalizePlannerContext(context, { maxContextBytes });
+  const result = assertWorkflowPlannerResult(await valid.proposeWorkflow({ graph, intent: cleanIntent, context: cleanContext, signal }), validationOptions);
   const plan = createAgentPlan(graph, {
     intent: cleanIntent,
     summary: result.summary,
@@ -99,8 +110,10 @@ export function createLocalPlannerProvider() {
 export async function planWithProvider(provider, graph, intent, context = {}, options = {}) {
   requireProvider(provider);
   const cleanIntent = normalizePlannerIntent(intent);
-  const result = await provider.plan({ graph, intent: cleanIntent, context });
-  return assertPlannerResult(result, options);
+  const { maxContextBytes, ...resultOptions } = options;
+  const cleanContext = normalizePlannerContext(context, { maxContextBytes });
+  const result = await provider.plan({ graph, intent: cleanIntent, context: cleanContext });
+  return assertPlannerResult(result, resultOptions);
 }
 
 export async function proposeWithProvider(provider, graph, intent, context = {}, options = {}) {

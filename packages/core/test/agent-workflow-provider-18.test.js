@@ -45,6 +45,20 @@ test('workflow provider bounds intent before provider invocation', async () => {
   assert.equal(calls, 0);
 });
 
+test('workflow provider bounds and normalizes context before provider invocation', async () => {
+  const graph = createGraph('Workflow context bound');
+  let calls = 0;
+  let receivedContext = null;
+  const provider = createWorkflowPlannerProvider({ id: 'context-bound', proposeWorkflow: async ({ context }) => { calls += 1; receivedContext = context; return { summary: 'noop', operations: [], tasks: [] }; } });
+  const context = { request: { mode: 'safe' } };
+  await proposeAgentWorkflowWithProvider(provider, graph, 'delegate', context);
+  assert.deepEqual(receivedContext, context);
+  assert.notEqual(receivedContext, context);
+  await assert.rejects(() => proposeAgentWorkflowWithProvider(provider, graph, 'delegate', { huge: 'x'.repeat(400) }, { maxContextBytes: 256 }), /context exceeds 256 bytes/);
+  await assert.rejects(() => proposeAgentWorkflowWithProvider(provider, graph, 'delegate', { unsafe: 1n }), /context must be JSON-safe/i);
+  assert.equal(calls, 1);
+});
+
 test('workflow provider rejects invalid task semantics and DAG dependencies before execution', async () => {
   const graph = createGraph('Invalid workflow');
   const providerFor = (tasks) => createWorkflowPlannerProvider({ id: 'invalid', proposeWorkflow: async () => ({ summary: 'Invalid', operations: [], tasks }) });

@@ -62,6 +62,20 @@ test("planner intent is normalized and bounded before provider invocation", asyn
   assert.equal(calls, 1);
 });
 
+test("planner context is canonical JSON-safe and bounded before provider invocation", async () => {
+  let calls = 0;
+  let receivedContext = null;
+  const provider = createPlannerProvider({ id: "context-bound", plan: async ({ context }) => { calls += 1; receivedContext = context; return { summary: "noop", operations: [] }; } });
+  const context = { nested: { value: "safe" }, list: [1, 2, 3] };
+  await planWithProvider(provider, createMediaProject(), "inspect", context);
+  assert.deepEqual(receivedContext, context);
+  assert.notEqual(receivedContext, context);
+  assert.notEqual(receivedContext.nested, context.nested);
+  await assert.rejects(() => planWithProvider(provider, createMediaProject(), "inspect", { huge: "x".repeat(400) }, { maxContextBytes: 256 }), /context exceeds 256 bytes/);
+  await assert.rejects(() => planWithProvider(provider, createMediaProject(), "inspect", { unsafe: 1n }), /context must be JSON-safe/i);
+  assert.equal(calls, 1);
+});
+
 test("planner registry keeps providers replaceable and discoverable", () => {
   const registry = new PlannerRegistry();
   registry.register(createLocalPlannerProvider());
