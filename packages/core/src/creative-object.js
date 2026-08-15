@@ -3,6 +3,8 @@ import { createId } from './id.js';
 import { canonicalOperationLogJson } from './operation-log.js';
 
 export const CREATIVE_OBJECT_SCHEMA = 'media.creative-object.v1';
+export const CREATIVE_OBJECT_MODEL_ACCESS = Object.freeze(['full', 'metadata', 'none']);
+const CREATIVE_OBJECT_MODEL_ACCESS_SET = new Set(CREATIVE_OBJECT_MODEL_ACCESS);
 
 function requireString(value, label) {
   if (typeof value !== 'string' || !value.trim()) throw new Error(`${label} must be a non-empty string`);
@@ -15,6 +17,12 @@ function cloneJson(value, label) {
 function normalizeTags(tags = []) {
   if (!Array.isArray(tags)) throw new Error('Creative object tags must be an array');
   return [...new Set(tags.map((tag) => requireString(tag, 'Creative object tag')))];
+}
+function normalizePermissions(value = {}) {
+  const permissions = cloneJson(value, 'Creative object permissions');
+  const modelAccess = permissions.modelAccess ?? 'full';
+  if (!CREATIVE_OBJECT_MODEL_ACCESS_SET.has(modelAccess)) throw new Error(`Unsupported creative object modelAccess: ${modelAccess}`);
+  return { ...permissions, modelAccess };
 }
 function normalizeConfidence(value) {
   if (value == null) return null;
@@ -58,7 +66,7 @@ export function createCreativeObject({
       tags: normalizeTags(tags),
       semantics: cloneJson(semantics, 'Creative object semantics'),
       provenance: cloneJson(provenance, 'Creative object provenance'),
-      permissions: cloneJson(permissions, 'Creative object permissions'),
+      permissions: normalizePermissions(permissions),
       generationHistory: cloneJson(generationHistory, 'Creative object generationHistory'),
       attributes: cloneJson(attributes, 'Creative object attributes'),
     },
@@ -83,9 +91,10 @@ export function updateCreativeObjectOperations(graph, objectId, patch = {}) {
   if (patch.semanticId !== undefined) props.semanticId = patch.semanticId == null ? null : requireString(String(patch.semanticId), 'Creative object semanticId');
   if (patch.confidence !== undefined) props.confidence = normalizeConfidence(patch.confidence);
   if (patch.tags !== undefined) props.tags = normalizeTags(patch.tags);
-  for (const key of ['semantics', 'provenance', 'permissions', 'attributes']) {
+  for (const key of ['semantics', 'provenance', 'attributes']) {
     if (patch[key] !== undefined) props[key] = { ...(object.props[key] ?? {}), ...cloneJson(patch[key], `Creative object ${key}`) };
   }
+  if (patch.permissions !== undefined) props.permissions = normalizePermissions({ ...(object.props.permissions ?? {}), ...cloneJson(patch.permissions, 'Creative object permissions') });
   if (patch.generationHistory !== undefined) {
     if (!Array.isArray(patch.generationHistory)) throw new Error('Creative object generationHistory must be an array');
     props.generationHistory = cloneJson(patch.generationHistory, 'Creative object generationHistory');

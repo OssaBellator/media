@@ -55,16 +55,30 @@ export class PlannerRegistry {
   list() { return [...this.#providers.values()]; }
 }
 
+function plannerObjectModelAccess(node) {
+  if (node?.kind !== "object") return "full";
+  const access = node.props?.permissions?.modelAccess ?? "full";
+  return ["full", "metadata", "none"].includes(access) ? access : "none";
+}
+
 export function createPlannerSnapshot(graph) {
-  const nodes = Object.fromEntries(Object.entries(graph.nodes).map(([id, node]) => {
+  const hiddenNodeIds = new Set(Object.values(graph.nodes).filter((node) => plannerObjectModelAccess(node) === "none").map((node) => node.id));
+  const nodes = Object.fromEntries(Object.entries(graph.nodes).filter(([id]) => !hiddenNodeIds.has(id)).map(([id, node]) => {
     const props = { ...(node.props ?? {}) };
     if (node.kind === "asset") {
       delete props.uri;
       delete props.waveform;
     }
+    if (node.kind === "object" && plannerObjectModelAccess(node) === "metadata") {
+      delete props.semantics;
+      delete props.provenance;
+      delete props.generationHistory;
+      delete props.attributes;
+      props.permissions = { modelAccess: "metadata" };
+    }
     return [id, { id: node.id, kind: node.kind, name: node.name, props }];
   }));
-  const edges = Object.fromEntries(Object.entries(graph.edges).map(([id, edge]) => [id, { id: edge.id, from: edge.from, to: edge.to, type: edge.type, props: { ...(edge.props ?? {}) } }]));
+  const edges = Object.fromEntries(Object.entries(graph.edges).filter(([, edge]) => !hiddenNodeIds.has(edge.from) && !hiddenNodeIds.has(edge.to)).map(([id, edge]) => [id, { id: edge.id, from: edge.from, to: edge.to, type: edge.type, props: { ...(edge.props ?? {}) } }]));
   return { version: graph.version, projectId: graph.projectId, nodes, edges };
 }
 
