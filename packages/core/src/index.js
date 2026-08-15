@@ -74,6 +74,8 @@ export * from './proxy.js';
 export * from './render-jobs.js';
 export * from './render-worker-auth.js';
 export * from './render-worker-coordinator.js';
+export * from './render-worker-store.js';
+export * from './render-artifact-store.js';
 export * from './render-worker-wire.js';
 export * from './render-worker-http.js';
 export * from './render-worker-client.js';
