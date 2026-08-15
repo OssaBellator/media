@@ -136,3 +136,13 @@ test('workflow provider descriptors reject accessors without executing them', as
   await assert.rejects(() => proposeAgentWorkflowWithProvider(provider, createGraph('Raw workflow provider'), 'delegate'), /enumerable data fields only/);
   assert.equal(getterCalls, 0);
 });
+
+
+test('model workflow planner factory rejects accessor-bearing config before routing', () => {
+  let routerGetterCalls = 0;
+  const config = {};
+  Object.defineProperty(config, 'router', { enumerable: true, get() { routerGetterCalls += 1; return new ModelRouter(); } });
+  assert.throws(() => createModelRouterWorkflowProvider(config), /config must contain enumerable data fields only/);
+  assert.equal(routerGetterCalls, 0);
+  assert.throws(() => createModelRouterWorkflowProvider({ router: new ModelRouter(), semanticContextOptions: { neighborDepth: '1' } }), /neighborDepth must be an integer/);
+});

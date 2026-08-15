@@ -50,3 +50,34 @@ test('planner result metadata is JSON-safe bounded and normalized', () => {
   assert.throws(() => assertPlannerResult({ summary: 'ok', operations: [], metadata: [] }), /metadata must be an object/);
   assert.throws(() => assertPlannerResult({ summary: 'ok', operations: [], metadata: { huge: 'x'.repeat(400) } }, { maxResultBytes: 256 }), /exceeds 256 bytes/);
 });
+
+
+test('model planner factory rejects accessor-bearing or malformed config before routing', () => {
+  let routerGetterCalls = 0;
+  const config = {};
+  Object.defineProperty(config, 'router', { enumerable: true, get() { routerGetterCalls += 1; return new ModelRouter(); } });
+  assert.throws(() => createModelRouterPlannerProvider(config), /config must contain enumerable data fields only/);
+  assert.equal(routerGetterCalls, 0);
+
+  let policyGetterCalls = 0;
+  const policy = {};
+  Object.defineProperty(policy, 'dataPolicy', { enumerable: true, get() { policyGetterCalls += 1; return 'local'; } });
+  assert.throws(() => createModelRouterPlannerProvider({ router: new ModelRouter(), policy }), /routing policy must be JSON-safe/i);
+  assert.equal(policyGetterCalls, 0);
+  assert.throws(() => createModelRouterPlannerProvider({ router: new ModelRouter(), semanticContextOptions: { limit: '3' } }), /limit must be an integer/);
+  assert.throws(() => createModelRouterPlannerProvider({ router: new ModelRouter(), semanticContextOptions: { hidden: true } }), /Unsupported semantic planner context option: hidden/);
+  assert.throws(() => createModelRouterPlannerProvider({ router: new ModelRouter(), hidden: true }), /Unsupported model router planner config field: hidden/);
+});
+
+test('model planner factory snapshots routing policy instead of retaining caller mutation', async () => {
+  const graph = createGraph('Policy snapshot');
+  const router = new ModelRouter()
+    .register({ id: 'remote', operations: ['plan'], location: 'remote', priority: 100, invoke: async () => ({ summary: 'remote', operations: [] }) })
+    .register({ id: 'local', operations: ['plan'], location: 'local', priority: 1, invoke: async () => ({ summary: 'local', operations: [] }) });
+  const policy = { dataPolicy: 'local' };
+  const provider = createModelRouterPlannerProvider({ router, policy });
+  policy.dataPolicy = 'any';
+  const plan = await proposeWithProvider(provider, graph, 'keep routing local');
+  assert.equal(plan.summary, 'local');
+  assert.equal(plan.metadata.planner.routing.backendId, 'local');
+});

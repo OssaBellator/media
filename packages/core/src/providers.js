@@ -17,8 +17,16 @@ export const MAX_PLANNER_PROVIDER_LABEL_CHARS = 256;
 export const MAX_PLANNER_PROVIDER_CAPABILITIES = 32;
 export const MAX_PLANNER_PROVIDER_CAPABILITY_CHARS = 64;
 export const MAX_PLANNER_PROVIDERS = 256;
+export const MAX_HTTP_PLANNER_REQUEST_BYTES = 16 * 1024 * 1024;
+export const MAX_HTTP_PLANNER_RESPONSE_BYTES = 8 * 1024 * 1024;
+export const MAX_HTTP_PLANNER_HEADERS_BYTES = 16 * 1024;
+export const MAX_HTTP_PLANNER_TIMEOUT_MS = 10 * 60 * 1000;
+const PLANNER_FACTORY_JSON_BYTES = 64 * 1024;
 const PLANNER_PROVIDER_KEYS = new Set(["id", "label", "capabilities", "plan"]);
 const WORKFLOW_PROVIDER_KEYS = new Set(["id", "label", "capabilities", "proposeWorkflow"]);
+const MODEL_PLANNER_FACTORY_KEYS = new Set(["router", "id", "label", "policy", "contextMode", "semanticContextOptions"]);
+const HTTP_PLANNER_FACTORY_KEYS = new Set(["id", "label", "endpoint", "headers", "timeoutMs", "maxResponseBytes", "maxRequestBytes", "fetchImpl"]);
+const SEMANTIC_CONTEXT_OPTION_KEYS = new Set(["limit", "neighborDepth", "maxNodes", "kinds"]);
 
 function utf8Bytes(text) { return new TextEncoder().encode(text).byteLength; }
 export function normalizePlannerIntent(intent, label = "Planner intent") {
@@ -66,6 +74,47 @@ function normalizeProviderDescriptor(provider, { workflow = false } = {}) {
   const method = workflow ? clean.proposeWorkflow : clean.plan;
   if (typeof method !== "function") throw new Error(`${label} ${id} requires a ${workflow ? "proposeWorkflow" : "plan"} function`);
   return Object.freeze({ id, label: providerLabel, capabilities, [workflow ? "proposeWorkflow" : "plan"]: method });
+}
+function normalizeFactoryDescriptor(config, label, allowedKeys) {
+  if (!config || typeof config !== "object" || Array.isArray(config)) throw new Error(`${label} config must be an object`);
+  const prototype = Object.getPrototypeOf(config);
+  if (prototype !== Object.prototype && prototype !== null) throw new Error(`${label} config must be a plain data object`);
+  const descriptors = Object.getOwnPropertyDescriptors(config);
+  const clean = {};
+  for (const key of Reflect.ownKeys(descriptors)) {
+    if (typeof key !== "string" || !allowedKeys.has(key)) throw new Error(`Unsupported ${label.toLowerCase()} config field: ${String(key)}`);
+    const descriptor = descriptors[key];
+    if (!descriptor.enumerable || !("value" in descriptor)) throw new Error(`${label} config must contain enumerable data fields only`);
+    clean[key] = descriptor.value;
+  }
+  return clean;
+}
+function strictFactoryNumber(value, label, { fallback, min, max, integer = true }) {
+  if (value === undefined) return fallback;
+  if (typeof value !== "number" || !Number.isFinite(value) || (integer && !Number.isInteger(value)) || value < min || value > max) throw new Error(`${label} must be ${integer ? "an integer" : "a number"} from ${min} to ${max}`);
+  return value;
+}
+function normalizeSemanticContextOptions(value = {}) {
+  const clean = normalizeBoundedModelJsonObject(value, "Semantic planner context options", { maxBytes: PLANNER_FACTORY_JSON_BYTES });
+  for (const key of Object.keys(clean)) if (!SEMANTIC_CONTEXT_OPTION_KEYS.has(key)) throw new Error(`Unsupported semantic planner context option: ${key}`);
+  const normalized = {};
+  if (clean.limit !== undefined) normalized.limit = strictFactoryNumber(clean.limit, "Semantic planner limit", { fallback: 12, min: 1, max: 200 });
+  if (clean.neighborDepth !== undefined) normalized.neighborDepth = strictFactoryNumber(clean.neighborDepth, "Semantic planner neighborDepth", { fallback: 1, min: 0, max: 4 });
+  if (clean.maxNodes !== undefined) normalized.maxNodes = strictFactoryNumber(clean.maxNodes, "Semantic planner maxNodes", { fallback: 256, min: 1, max: 4096 });
+  if (clean.kinds !== undefined) {
+    if (!Array.isArray(clean.kinds) || clean.kinds.length > 32 || clean.kinds.some((kind) => typeof kind !== "string" || !kind.trim() || kind.length > 64)) throw new Error("Semantic planner kinds must contain at most 32 bounded strings");
+    normalized.kinds = [...new Set(clean.kinds.map((kind) => kind.trim()))];
+  }
+  return Object.freeze(normalized);
+}
+function normalizeHttpPlannerHeaders(value = {}) {
+  const clean = normalizeBoundedModelJsonObject(value, "HTTP planner headers", { maxBytes: MAX_HTTP_PLANNER_HEADERS_BYTES });
+  const headers = {};
+  for (const [key, item] of Object.entries(clean)) {
+    if (!key.trim() || key.length > 256 || typeof item !== "string" || item.length > 4096) throw new Error("HTTP planner headers must be bounded string pairs");
+    headers[key] = item;
+  }
+  return Object.freeze(headers);
 }
 function requireProvider(provider) { return normalizeProviderDescriptor(provider); }
 function requireWorkflowProvider(provider) { return normalizeProviderDescriptor(provider, { workflow: true }); }
@@ -157,14 +206,14 @@ export async function proposeWithProvider(provider, graph, intent, context = {},
   });
 }
 
-export function createModelRouterPlannerProvider({
-  router,
-  id = "models",
-  label = "Model router planner",
-  policy = {},
-  contextMode = "full",
-  semanticContextOptions = {},
-} = {}) {
+export function createModelRouterPlannerProvider(config = {}) {
+  const clean = normalizeFactoryDescriptor(config, "Model router planner", MODEL_PLANNER_FACTORY_KEYS);
+  const router = clean.router;
+  const id = clean.id ?? "models";
+  const label = clean.label ?? "Model router planner";
+  const policy = normalizeBoundedModelJsonObject(clean.policy ?? {}, "Model planner routing policy", { maxBytes: PLANNER_FACTORY_JSON_BYTES });
+  const contextMode = clean.contextMode ?? "full";
+  const semanticContextOptions = normalizeSemanticContextOptions(clean.semanticContextOptions ?? {});
   if (!router || typeof router.execute !== "function") throw new Error("Model router planner requires a router");
   if (!["full", "semantic"].includes(contextMode)) throw new Error(`Unsupported model planner context mode: ${contextMode}`);
   return createPlannerProvider({
@@ -198,14 +247,14 @@ export function createModelRouterPlannerProvider({
   });
 }
 
-export function createModelRouterWorkflowProvider({
-  router,
-  id = "workflow-models",
-  label = "Model router workflow planner",
-  policy = {},
-  contextMode = "semantic",
-  semanticContextOptions = {},
-} = {}) {
+export function createModelRouterWorkflowProvider(config = {}) {
+  const clean = normalizeFactoryDescriptor(config, "Model router workflow planner", MODEL_PLANNER_FACTORY_KEYS);
+  const router = clean.router;
+  const id = clean.id ?? "workflow-models";
+  const label = clean.label ?? "Model router workflow planner";
+  const policy = normalizeBoundedModelJsonObject(clean.policy ?? {}, "Model workflow routing policy", { maxBytes: PLANNER_FACTORY_JSON_BYTES });
+  const contextMode = clean.contextMode ?? "semantic";
+  const semanticContextOptions = normalizeSemanticContextOptions(clean.semanticContextOptions ?? {});
   if (!router || typeof router.execute !== "function") throw new Error("Model router workflow planner requires a router");
   if (!["full", "semantic"].includes(contextMode)) throw new Error(`Unsupported model workflow context mode: ${contextMode}`);
   return createWorkflowPlannerProvider({
@@ -353,14 +402,21 @@ async function readBoundedPlannerResponse(response, maxBytes) {
   throw new Error("Planner response body is unavailable");
 }
 
-export function createHttpPlannerProvider({ id = "http", label = "HTTP planner", endpoint, headers = {}, timeoutMs = 30000, maxResponseBytes = DEFAULT_PLANNER_RESULT_BYTES, maxRequestBytes = DEFAULT_PLANNER_REQUEST_BYTES, fetchImpl = globalThis.fetch } = {}) {
+export function createHttpPlannerProvider(config = {}) {
+  const clean = normalizeFactoryDescriptor(config, "HTTP planner", HTTP_PLANNER_FACTORY_KEYS);
+  const id = clean.id ?? "http";
+  const label = clean.label ?? "HTTP planner";
+  const endpoint = clean.endpoint;
+  if (typeof endpoint !== "string" || !endpoint.trim()) throw new Error("HTTP planner requires a valid endpoint URL");
   let url;
   try { url = new URL(endpoint); } catch { throw new Error("HTTP planner requires a valid endpoint URL"); }
   if (!["http:", "https:"].includes(url.protocol)) throw new Error("HTTP planner endpoint must use http or https");
+  const headers = normalizeHttpPlannerHeaders(clean.headers ?? {});
+  const fetchImpl = clean.fetchImpl ?? globalThis.fetch;
   if (typeof fetchImpl !== "function") throw new Error("HTTP planner requires fetch support");
-  const timeout = Math.max(100, Number(timeoutMs) || 30000);
-  const responseLimit = boundedPositive(maxResponseBytes, DEFAULT_PLANNER_RESULT_BYTES);
-  const requestLimit = boundedPositive(maxRequestBytes, DEFAULT_PLANNER_REQUEST_BYTES);
+  const timeout = strictFactoryNumber(clean.timeoutMs, "HTTP planner timeoutMs", { fallback: 30000, min: 100, max: MAX_HTTP_PLANNER_TIMEOUT_MS });
+  const responseLimit = strictFactoryNumber(clean.maxResponseBytes, "HTTP planner maxResponseBytes", { fallback: DEFAULT_PLANNER_RESULT_BYTES, min: 256, max: MAX_HTTP_PLANNER_RESPONSE_BYTES });
+  const requestLimit = strictFactoryNumber(clean.maxRequestBytes, "HTTP planner maxRequestBytes", { fallback: DEFAULT_PLANNER_REQUEST_BYTES, min: 256, max: MAX_HTTP_PLANNER_REQUEST_BYTES });
   return createPlannerProvider({
     id,
     label,

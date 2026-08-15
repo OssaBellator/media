@@ -2,6 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createGraph } from '../src/graph.js';
 import {
+  MAX_HTTP_PLANNER_REQUEST_BYTES,
+  MAX_HTTP_PLANNER_RESPONSE_BYTES,
+  MAX_HTTP_PLANNER_TIMEOUT_MS,
   MAX_PLANNER_OPERATIONS,
   MAX_PLANNER_SUMMARY_CHARS,
   assertPlannerResult,
@@ -41,4 +44,41 @@ test('HTTP planner bounds request snapshots before network submission', async ()
   const provider = createHttpPlannerProvider({ endpoint: 'https://planner.test', maxRequestBytes: 256, fetchImpl: async () => { called = true; return new Response('{"summary":"ok","operations":[]}'); } });
   await assert.rejects(() => planWithProvider(provider, graph, 'edit'), /request exceeds 256 bytes/);
   assert.equal(called, false);
+});
+
+
+test('HTTP planner factory rejects accessor-bearing and coercive config without executing it', () => {
+  let endpointGetterCalls = 0;
+  const config = {};
+  Object.defineProperty(config, 'endpoint', { enumerable: true, get() { endpointGetterCalls += 1; return 'https://planner.test'; } });
+  assert.throws(() => createHttpPlannerProvider(config), /config must contain enumerable data fields only/);
+  assert.equal(endpointGetterCalls, 0);
+
+  let endpointCoercions = 0;
+  const endpoint = { toString() { endpointCoercions += 1; return 'https://planner.test'; } };
+  assert.throws(() => createHttpPlannerProvider({ endpoint }), /valid endpoint URL/);
+  assert.equal(endpointCoercions, 0);
+
+  let headerGetterCalls = 0;
+  const headers = {};
+  Object.defineProperty(headers, 'authorization', { enumerable: true, get() { headerGetterCalls += 1; return 'secret'; } });
+  assert.throws(() => createHttpPlannerProvider({ endpoint: 'https://planner.test', headers }), /headers must be JSON-safe/i);
+  assert.equal(headerGetterCalls, 0);
+  assert.throws(() => createHttpPlannerProvider({ endpoint: 'https://planner.test', timeoutMs: '1000' }), /timeoutMs must be an integer/);
+  assert.throws(() => createHttpPlannerProvider({ endpoint: 'https://planner.test', hidden: true }), /Unsupported http planner config field: hidden/);
+});
+
+test('HTTP planner factory enforces absolute transport ceilings and snapshots headers', async () => {
+  assert.throws(() => createHttpPlannerProvider({ endpoint: 'https://planner.test', maxRequestBytes: MAX_HTTP_PLANNER_REQUEST_BYTES + 1 }), /maxRequestBytes must be an integer/);
+  assert.throws(() => createHttpPlannerProvider({ endpoint: 'https://planner.test', maxResponseBytes: MAX_HTTP_PLANNER_RESPONSE_BYTES + 1 }), /maxResponseBytes must be an integer/);
+  assert.throws(() => createHttpPlannerProvider({ endpoint: 'https://planner.test', timeoutMs: MAX_HTTP_PLANNER_TIMEOUT_MS + 1 }), /timeoutMs must be an integer/);
+  assert.throws(() => createHttpPlannerProvider({ endpoint: 'https://planner.test', headers: { authorization: 7 } }), /headers must be bounded string pairs/);
+
+  const sourceHeaders = { authorization: 'one' };
+  let seenHeaders = null;
+  const provider = createHttpPlannerProvider({ endpoint: 'https://planner.test', headers: sourceHeaders, fetchImpl: async (_url, options) => { seenHeaders = options.headers; return new Response('{"summary":"ok","operations":[]}'); } });
+  sourceHeaders.authorization = 'two';
+  await planWithProvider(provider, createGraph(), 'edit');
+  assert.equal(seenHeaders.authorization, 'one');
+  assert.equal(seenHeaders['content-type'], 'application/json');
 });
