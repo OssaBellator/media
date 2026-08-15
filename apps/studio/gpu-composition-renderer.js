@@ -12,14 +12,13 @@ export class BrowserGpuCompositionRenderer {
   async targetFor(canvas){let target=this.targets.get(canvas);if(target)return target;const device=await this.ensureDevice();const context=canvas.getContext?.('webgpu');if(!context)throw new Error('Canvas WebGPU context is unavailable');context.configure({device,format:this.format,alphaMode:'premultiplied'});const compositor=new GpuGraphCompositor(device,{targetFormat:this.format,workingFormat:this.workingFormat,maxCacheBytes:this.maxCacheBytes,toneMap:this.toneMap});target={canvas,context,compositor,temporalCompositor:null,temporalAccumulator:null};this.targets.set(canvas,target);this.targetSet.add(target);return target;}
   async present(canvas,plan,{assetResolver,frameProvider,priority=100,signal,fidelity=null,shouldCommit}={}){const prepared=prepareGpuVectorMaskPlan(plan,{assetResolver,frameProvider,fidelity});if(!prepared.supported)throw new Error(`GPU composition unsupported: ${prepared.reason}`);const support=gpuGraphSupport(prepared.plan);if(!this.available||!support.supported)throw new Error(`GPU composition unsupported: ${support.reason}`);const target=await this.targetFor(canvas);const layers=await target.compositor.resolve(prepared.plan,{assetResolver:prepared.assetResolver,frameProvider:prepared.frameProvider,priority,signal,fidelity});if(shouldCommit&&shouldCommit()===false)return{stale:true,backend:'webgpu-graph',layersResolved:layers.length};const encoder=this.device.createCommandEncoder();const result=target.compositor.renderResolved(encoder,target.context.getCurrentTexture().createView(),prepared.plan,layers);this.device.queue.submit([encoder.finish()]);return{...result,canvas,layersResolved:layers.length,vectorMasks:prepared.vectorMasks??0};}
   async presentTemporal(canvas,graph,evaluated,{evaluate,scalePlan=(plan)=>plan,scaleOptions={},assetResolver,frameProvider,priority=100,signal,fidelity=null,shouldCommit,onSample}={}){
-    if(this.toneMap)throw new Error('GPU temporal accumulation currently requires SDR output');
     if(typeof evaluate!=='function')throw new Error('GPU temporal composition requires evaluate');
     const samples=temporalSamplesForFidelity(evaluated,fidelity);
     if(samples.length<2)throw new Error('GPU temporal composition requires more than one sample');
     const target=await this.targetFor(canvas);
-    target.temporalCompositor??=new GpuGraphCompositor(this.device,{targetFormat:this.workingFormat,workingFormat:this.workingFormat,maxCacheBytes:this.maxCacheBytes,toneMap:null});
+    target.temporalCompositor??=new GpuGraphCompositor(this.device,{targetFormat:this.workingFormat,workingFormat:this.workingFormat,maxCacheBytes:this.maxCacheBytes,toneMap:this.toneMap});
     target.temporalAccumulator??=new GpuTemporalAccumulator(this.device,{workingFormat:this.workingFormat,targetFormat:this.format});
-    let outputPlan=null,layersResolved=0,vectorMasks=0;const sampleResults=[];
+    let outputPlan=null,layersResolved=0,vectorMasks=0,sourcePeakNits=100;const sampleResults=[];
     for(let sampleIndex=0;sampleIndex<samples.length;sampleIndex++){
       const sample=samples[sampleIndex];
       if(signal?.aborted)throw abortError();
@@ -34,15 +33,17 @@ export class BrowserGpuCompositionRenderer {
       const layers=await target.temporalCompositor.resolve(prepared.plan,{assetResolver:prepared.assetResolver,frameProvider:prepared.frameProvider,priority,signal,fidelity:sampleFidelity});
       if(shouldCommit&&shouldCommit()===false)return{stale:true,backend:'webgpu-temporal',samples,sampleResults,layersResolved,vectorMasks};
       const encoder=this.device.createCommandEncoder();
-      const result=target.temporalCompositor.renderResolved(encoder,target.temporalAccumulator.scratchView(),prepared.plan,layers);
-      target.temporalAccumulator.add(encoder,sample.weight);
+      const result=target.temporalCompositor.renderResolved(encoder,target.temporalAccumulator.scratchView(),prepared.plan,layers),workingTexture=target.temporalCompositor.targets?.[layers.length%2?'b':'a'];
+      if(!workingTexture)throw new Error('GPU temporal compositor did not expose a working texture');
+      sourcePeakNits=Math.max(sourcePeakNits,...layers.filter((layer)=>layer.image?.kind==='linear-rgba16').map((layer)=>Number(layer.image?.sourcePeakNits??100)));
+      target.temporalAccumulator.add(encoder,workingTexture,sample.weight);
       this.device.queue.submit([encoder.finish()]);
       layersResolved+=layers.length;vectorMasks+=prepared.vectorMasks??0;sampleResults.push({sample,plan,result});
       onSample?.({sample,plan,result,index:sampleResults.length-1,total:samples.length});
     }
     if(shouldCommit&&shouldCommit()===false)return{stale:true,backend:'webgpu-temporal',samples,sampleResults,layersResolved,vectorMasks};
-    const encoder=this.device.createCommandEncoder(),final=target.temporalAccumulator.finalize(encoder,target.context.getCurrentTexture().createView());this.device.queue.submit([encoder.finish()]);
-    return{backend:'webgpu-temporal',canvas,plan:outputPlan,samples,sampleResults,layersResolved,vectorMasks,workingFormat:final.workingFormat};
+    const encoder=this.device.createCommandEncoder(),final=target.temporalAccumulator.finalize(encoder,target.context.getCurrentTexture().createView(),{toneMap:this.toneMap,sourcePeakNits});this.device.queue.submit([encoder.finish()]);
+    return{backend:'webgpu-temporal',canvas,plan:outputPlan,samples,sampleResults,layersResolved,vectorMasks,workingFormat:final.workingFormat,toneMap:final.toneMap,sourcePeakNits:final.sourcePeakNits};
   }
   clear(){for(const target of this.targetSet){target.compositor.clear?.();target.temporalCompositor?.clear?.();target.temporalAccumulator?.clear?.();try{target.context.unconfigure?.();}catch{}}this.targetSet.clear();this.targets=new WeakMap();}
 }

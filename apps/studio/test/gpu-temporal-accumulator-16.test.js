@@ -29,17 +29,19 @@ test('temporal accumulator uses additive rgba16float blending and linear-light c
   assert.equal(blend.alpha.srcFactor,'one');assert.equal(blend.alpha.dstFactor,'one');
   acc.begin(4,2);
   const first=encoder(),second=encoder(),final=encoder();
-  acc.add(first,.25);acc.add(second,.75);acc.finalize(final,{target:true});
+  const source=device.createTexture({});acc.add(first,source,.25);acc.add(second,source,.75);acc.finalize(final,{target:true});
   assert.equal(first.passes[0].desc.colorAttachments[0].loadOp,'clear');
   assert.equal(second.passes[0].desc.colorAttachments[0].loadOp,'load');
-  assert.deepEqual(device.writes.map((value)=>value[0]),[.25,.75]);
+  assert.deepEqual(device.writes.slice(0,2).map((value)=>value[0]),[.25,.75]);assert.equal(device.writes.at(-1)[0],0);
   assert.equal(final.passes[0].desc.colorAttachments[0].loadOp,'clear');
   assert.equal(acc.samples,2);
 });
 test('begin resets sample count and resizes owned textures only when dimensions change',()=>{
   const device=fakeDevice(),acc=new GpuTemporalAccumulator(device);
-  acc.begin(2,2);const first=[acc.scratch,acc.accumulation],e=encoder();acc.add(e,1);
+  acc.begin(2,2);const first=[acc.scratch,acc.accumulation],e=encoder();acc.add(e,acc.scratch,1);
   acc.begin(2,2);assert.equal(acc.samples,0);assert.equal(acc.scratch,first[0]);assert.equal(acc.accumulation,first[1]);
   acc.begin(3,2);assert.equal(first[0].destroyed,true);assert.equal(first[1].destroyed,true);
 });
 test('finalize rejects an empty accumulation',()=>{const acc=new GpuTemporalAccumulator(fakeDevice());acc.begin(1,1);assert.throws(()=>acc.finalize(encoder(),{}),/no samples/);});
+
+test('final pass applies one HDR tone-map policy after temporal accumulation',()=>{const device=fakeDevice(),acc=new GpuTemporalAccumulator(device);acc.begin(1,1);acc.add(encoder(),acc.scratch,1);const result=acc.finalize(encoder(),{},{toneMap:{method:'hable',targetPeakNits:200},sourcePeakNits:1200});const params=device.writes.at(-1);assert.deepEqual(params.slice(0,3),[3,1200,200]);assert.equal(result.sourcePeakNits,1200);assert.equal(result.toneMap.method,'hable');assert.match(GPU_TEMPORAL_FINAL_WGSL,/tone\(c\.rgb/);});

@@ -18,7 +18,7 @@
 - trusted `media.codec.v1` plugin backends and async production kernel startup;
 - display/HDR output policy applied at GPU renderer construction;
 - temporal shutter/rolling-shutter sampling and CPU/GPU accumulation contracts;
-- SDR Cut temporal motion blur scheduled on WebGPU with linear-light weighted `rgba16float` accumulation, per-sample vector-mask adaptation and deterministic Canvas fallback;
+- Cut temporal motion blur scheduled on WebGPU with pre-final linear `rgba16float` working-texture accumulation, per-sample vector-mask adaptation, one post-accumulation HDR tone-map pass and deterministic Canvas fallback;
 - vector matte signed-distance/feather reference rasterization;
 - MP4 scale projection, stress command and longitudinal conformance history;
 - Cut and composition-delivery runtime sessions with direct in-memory graph ownership in Studio;
@@ -33,9 +33,8 @@
 ## Next hardening
 
 1. run the latency tracker against real live-media/browser lab fixtures and expand encrypted/adaptive HLS/DASH coverage;
-2. expose the compositor's pre-final linear working texture so HDR/tone-mapped temporal motion blur can stay on GPU before output tone mapping;
-3. platform color management, display calibration and actual HDR swap-chain/output surfaces;
-4. signed/integrity-pinned codec plugin packaging and real native/WASM codec distributions;
-5. larger encrypted/adaptive real-media corpus plus HLS/DASH live lab fixtures;
-6. integrate MP4 chunk planning directly into final writer interleave policy and stress multi-day outputs;
-7. replace the legacy visible `0.4` badge with the 0.16 app version, then begin authenticated collaboration and distributed render execution.
+2. platform color management, display calibration and actual HDR swap-chain/output surfaces;
+3. signed/integrity-pinned codec plugin packaging and real native/WASM codec distributions;
+4. larger encrypted/adaptive real-media corpus plus HLS/DASH live lab fixtures;
+5. integrate MP4 chunk planning directly into final writer interleave policy and stress multi-day outputs;
+6. replace the legacy visible `0.4` badge with the 0.16 app version, then begin authenticated collaboration and distributed render execution.
