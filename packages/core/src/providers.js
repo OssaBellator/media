@@ -28,7 +28,12 @@ export function assertPlannerResult(result, { maxResultBytes = DEFAULT_PLANNER_R
   if (!Array.isArray(result.operations)) throw new Error("Planner result requires an operations array");
   if (result.operations.length > MAX_PLANNER_OPERATIONS) throw new Error(`Planner result exceeds ${MAX_PLANNER_OPERATIONS} operations`);
   result.operations.forEach(assertValidOperation);
-  const canonical = canonicalOperationLogJson({ summary: result.summary, operations: result.operations });
+  const normalized = { summary: result.summary, operations: result.operations };
+  if (result.metadata !== undefined) {
+    if (!result.metadata || typeof result.metadata !== "object" || Array.isArray(result.metadata)) throw new Error("Planner result metadata must be an object");
+    normalized.metadata = result.metadata;
+  }
+  const canonical = canonicalOperationLogJson(normalized);
   const byteLimit = boundedPositive(maxResultBytes, DEFAULT_PLANNER_RESULT_BYTES);
   if (utf8Bytes(canonical) > byteLimit) throw new Error(`Planner result exceeds ${byteLimit} bytes`);
   return JSON.parse(canonical);
@@ -60,7 +65,48 @@ export async function proposeWithProvider(provider, graph, intent, context = {},
     operations: result.operations,
     providerId: valid.id,
     providerLabel: valid.label ?? valid.id,
-    metadata: { providerCapabilities: [...(valid.capabilities ?? [])] },
+    metadata: { providerCapabilities: [...(valid.capabilities ?? [])], ...(result.metadata ? { planner: result.metadata } : {}) },
+  });
+}
+
+export function createModelRouterPlannerProvider({
+  router,
+  id = "models",
+  label = "Model router planner",
+  policy = {},
+  contextMode = "full",
+  semanticContextOptions = {},
+} = {}) {
+  if (!router || typeof router.execute !== "function") throw new Error("Model router planner requires a router");
+  if (!["full", "semantic"].includes(contextMode)) throw new Error(`Unsupported model planner context mode: ${contextMode}`);
+  return createPlannerProvider({
+    id,
+    label,
+    capabilities: ["plan", "model-router", contextMode === "semantic" ? "semantic-context" : "full-context"],
+    plan: async ({ graph, intent, context }) => {
+      const routedContext = contextMode === "semantic"
+        ? createPlannerSemanticContext(graph, intent, semanticContextOptions)
+        : { graph: createPlannerSnapshot(graph), matches: [] };
+      const routed = await router.execute("plan", {
+        graph: routedContext.graph,
+        intent,
+        context,
+        semanticMatches: routedContext.matches,
+      }, { policy, context: { plannerProviderId: id, contextMode } });
+      const result = assertPlannerResult(routed.output);
+      return {
+        ...result,
+        metadata: {
+          ...(result.metadata ?? {}),
+          routing: {
+            backendId: routed.backendId,
+            attempts: routed.attempts.slice(0, 32),
+            contextMode,
+            semanticMatchIds: routedContext.matches.map((match) => match.id).slice(0, 32),
+          },
+        },
+      };
+    },
   });
 }
 
@@ -132,7 +178,8 @@ export function createPlannerSnapshot(graph, { focusNodeIds = null, neighborDept
 
 export function createPlannerSemanticContext(graph, intent, { limit = 12, neighborDepth = 1, maxNodes = 256, kinds = null } = {}) {
   const safeGraph = createPlannerSnapshot(graph);
-  const matches = searchSemanticGraph(safeGraph, intent, { limit, kinds });
+  const searchKinds = kinds ?? ["asset", "composition", "track", "clip", "layer", "effect", "output", "object"];
+  const matches = searchSemanticGraph(safeGraph, intent, { limit, kinds: searchKinds });
   const snapshot = createPlannerSnapshot(graph, { focusNodeIds: matches.map((match) => match.id), neighborDepth, maxNodes });
   const included = new Set(Object.keys(snapshot.nodes));
   return { graph: snapshot, matches: matches.filter((match) => included.has(match.id)) };
