@@ -31,6 +31,8 @@ function validateTaskPayload(kind, payload) {
     if (!GENERATED_OPERATION_SET.has(operation)) throw new Error(`Unsupported Agent generate-media operation: ${operation}`);
     normalizeIds(payload.sourceNodeIds ?? [], 'Agent generate-media sourceNodeIds');
     normalizeIds(payload.creativeObjectIds ?? [], 'Agent generate-media creativeObjectIds');
+    normalizeIds(payload.sourceSemanticIds ?? [], 'Agent generate-media sourceSemanticIds');
+    normalizeIds(payload.creativeObjectSemanticIds ?? [], 'Agent generate-media creativeObjectSemanticIds');
     if (payload.settings !== undefined) cloneJson(payload.settings, 'Agent generate-media settings');
     if (payload.intent !== undefined && typeof payload.intent !== 'string') throw new Error('Agent generate-media intent must be a string');
   } else if (kind === 'semantic-enrichment') {
@@ -95,7 +97,18 @@ export function completeAgentWorkflowTask(workflow, taskId) {
 export function failAgentWorkflowTask(workflow, taskId, error) {
   const task = workflow.tasks.find((item) => item.id === taskId);
   if (!task) throw new Error(`Unknown Agent workflow task: ${taskId}`);
-  return assertAgentWorkflow(updatePipelineTask(workflow, taskId, { status: 'failed', error: String(error?.message ?? error) }));
+  let next = updatePipelineTask(workflow, taskId, { status: 'failed', error: String(error?.message ?? error) });
+  let changed = true;
+  while (changed) {
+    changed = false;
+    const failed = new Set(next.tasks.filter((item) => item.status === 'failed').map((item) => item.id));
+    for (const item of next.tasks) {
+      if (item.status !== 'pending' || !item.dependsOn.some((id) => failed.has(id))) continue;
+      next = updatePipelineTask(next, item.id, { status: 'failed', error: 'dependency-failed' });
+      changed = true;
+    }
+  }
+  return assertAgentWorkflow(next);
 }
 
 export function agentWorkflowProgress(workflow) {

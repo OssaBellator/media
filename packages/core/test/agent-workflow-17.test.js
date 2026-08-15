@@ -89,3 +89,18 @@ test('Agent workflow result operations are preflighted as part of the revised pl
   workflow = completeAgentWorkflowTask(workflow, 'generate');
   assert.throws(() => materializeAgentWorkflowPlan(graph, workflow, { generate: { operations: [{ type: 'node.update', nodeId: 'missing', patch: { name: 'bad' } }] } }), /Unknown node/);
 });
+
+test('failed upstream tasks cascade failure to required dependents instead of deadlocking the workflow', () => {
+  const graph = createGraph('Film');
+  const plan = createAgentPlan(graph, { intent: 'analyze then generate', providerId: 'mock', operations: [] });
+  let workflow = createAgentWorkflow(plan, [
+    { id: 'optional-analysis', kind: 'semantic-enrichment', optional: true, payload: {} },
+    { id: 'required-generation', kind: 'generate-media', dependsOn: ['optional-analysis'], payload: { operation: 'generate-image' } },
+  ]);
+  workflow = failAgentWorkflowTask(workflow, 'optional-analysis', new Error('analysis unavailable'));
+  const dependent = workflow.tasks.find((task) => task.id === 'required-generation');
+  assert.equal(dependent.status, 'failed');
+  assert.equal(dependent.error, 'dependency-failed');
+  assert.equal(agentWorkflowProgress(workflow).blocked, true);
+  assert.deepEqual(runnableAgentWorkflowTasks(workflow), []);
+});
