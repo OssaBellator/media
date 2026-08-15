@@ -46,6 +46,7 @@ export * from './agent-rebase.js';
 export * from './agent-workflow.js';
 export * from './creative-object.js';
 export * from './asset-replacement.js';
+export * from './object-restyle.js';
 export * from './generated-media.js';
 export * from './generation-runner.js';
 export * from './semantic-search.js';
