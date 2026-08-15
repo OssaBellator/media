@@ -46,3 +46,11 @@ A future collaboration protocol will need authenticated actor identity, causal o
 History navigation and project replacement are not naturally invertible operation batches in the current snapshot-based `history.js`. For those transitions the session provides an explicit checkpoint entry containing the target graph. Checkpoints use the same checksum chain and atomic persistence path, and replay recognizes them deterministically. They are intended for undo/redo/import/reset boundaries; ordinary edits should continue to record compact operation transactions.
 
 `recoverProjectJournalSession()` replays the base graph through operation and checkpoint entries and refuses to start if the replayed graph differs from the stored current checkpoint.
+
+## Snapshot history adapter
+
+`apps/studio/history-journal-session.js` bridges the durable project journal to Studio's existing snapshot `History` model. `edit()` waits for the operation entry and graph checkpoint to persist before calling the history commit function. `undo()` and `redo()` compute the candidate snapshot first, persist it as a checkpoint entry, and only then switch the visible history. Empty undo/redo moves are true no-ops and do not consume journal sequence numbers.
+
+`replace()` is the corresponding boundary for project open/reset-style graph replacement: it persists a replayable checkpoint and starts a fresh in-memory undo history at that graph while retaining the durable journal chain. Recovery verifies the journal through `ProjectJournalSession` and intentionally restarts the ephemeral undo stack from the recovered current graph.
+
+This adapter is the intended `app.js` integration surface; the large editor file no longer needs to implement journal sequencing, recovery replay, or persistence-failure rollback itself.
