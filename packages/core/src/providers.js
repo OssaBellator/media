@@ -1,3 +1,4 @@
+import { createAgentPlan } from "./agent-plan.js";
 import { assertValidOperation } from "./operations.js";
 import { planIntent } from "./planner.js";
 
@@ -29,6 +30,21 @@ export async function planWithProvider(provider, graph, intent, context = {}) {
   if (typeof intent !== "string" || !intent.trim()) throw new Error("Planner intent must be non-empty");
   const result = await provider.plan({ graph, intent: intent.trim(), context });
   return assertPlannerResult(result);
+}
+
+export async function proposeWithProvider(provider, graph, intent, context = {}) {
+  const valid = requireProvider(provider);
+  if (typeof intent !== "string" || !intent.trim()) throw new Error("Planner intent must be non-empty");
+  const cleanIntent = intent.trim();
+  const result = await planWithProvider(valid, graph, cleanIntent, context);
+  return createAgentPlan(graph, {
+    intent: cleanIntent,
+    summary: result.summary,
+    operations: result.operations,
+    providerId: valid.id,
+    providerLabel: valid.label ?? valid.id,
+    metadata: { providerCapabilities: [...(valid.capabilities ?? [])] },
+  });
 }
 
 export class PlannerRegistry {
