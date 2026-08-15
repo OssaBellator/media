@@ -44,6 +44,7 @@ export * from './agent-plan.js';
 export * from './agent-review.js';
 export * from './agent-rebase.js';
 export * from './creative-object.js';
+export * from './generated-media.js';
 export * from './semantic-search.js';
 export * from './model-router.js';
 export * from './planner.js';
