@@ -21,4 +21,23 @@ Studio stores:
 
 On startup/resume, interrupted `running` chunks recover to pending, while completed chunks remain immutable and are skipped.
 
-The final assembly index is intentionally independent of storage implementation so a future native/cloud renderer can use the same job state and byte/time segment contract.
+## Authenticated remote workers
+
+`packages/core/src/render-worker-auth.js` adds an additive remote-worker trust boundary without changing local in-process rendering.
+
+`media.render-worker.v1` claim messages bind the render job, the exact next eligible chunk/index, the expected attempt number, actor ID, key ID and optional freshness/nonce fields. The coordinator verifies the injected signature/replay policy before `claimNextRenderChunk()` can transition state. Authenticated claims persist `workerKeyId` and the claim attestation alongside the existing `workerId`.
+
+Completion attestations bind the same actor/key to the active chunk attempt plus a JSON artifact descriptor and SHA-256 integrity descriptor. `completeAuthenticatedRenderChunk()` requires:
+
+1. a valid worker signature and policy checks;
+2. exact job/chunk/attempt binding;
+3. the same actor and key that own the running chunk;
+4. an injected artifact verifier that confirms the uploaded/stored artifact matches the signed integrity descriptor.
+
+Only then does the existing `completeRenderChunk()` transition run. Release, retry and interrupted-recovery paths clear `workerId`, `workerKeyId` and claim-attestation state together so stale authenticated ownership cannot survive a reset.
+
+The artifact verifier and nonce/key services are intentionally injected. Core does not pretend that signing a descriptor proves remote bytes were uploaded correctly, nor does it define a deployment PKI or replay database.
+
+## Boundary
+
+The final assembly index is intentionally independent of storage implementation so native/cloud renderers can use the same job state and byte/time segment contract. A production distributed renderer still needs coordinator/network transport, durable nonce/replay state, key enrollment/revocation, artifact storage and scheduler policy.

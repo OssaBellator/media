@@ -31,4 +31,4 @@ This gives collaboration a deterministic authenticated ingestion boundary withou
 
 This is not yet a complete collaboration protocol. Media does **not** yet define network transport, account/session authentication, key enrollment/revocation, causal merge semantics, concurrent-edit conflict resolution, presence, permissions or server persistence. Stale/forked batches fail closed until those policies are explicit.
 
-Distributed render workers should reuse the same actor/key trust vocabulary when worker claims and artifact attestations are authenticated; they should not invent a separate identity model.
+Distributed render workers reuse the same actor/key trust vocabulary in `media.render-worker.v1`. Signed claim and completion messages bind a specific chunk attempt to that identity, and completion requires an injected verifier for the signed SHA-256 artifact descriptor before render state can transition. Coordinator transport, durable nonce state and deployment key lifecycle remain external hardening work.

@@ -60,6 +60,7 @@ export * from './pcm.js';
 export * from './pipeline.js';
 export * from './proxy.js';
 export * from './render-jobs.js';
+export * from './render-worker-auth.js';
 export * from './seek-index.js';
 export * from './stream-mux.js';
 export * from './wav.js';
