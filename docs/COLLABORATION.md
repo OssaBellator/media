@@ -36,6 +36,16 @@ This gives collaboration a deterministic authenticated ingestion boundary withou
 For coordinators that need application-level atomicity, `prepareTrustedMessageVerification()` verifies the actor/key/domain/signature and returns a proposed replay-state revision without persisting it. That proposed registry can be committed in the same coordinator transaction as the accepted graph/log or render-job transition.
 `TrustedTransitionSession` packages that ordering into a serialized verify → application transition → atomic persist → publish session, so conflict responses and accepted graph/log transitions can share the same replay-state commit discipline.
 
+## Atomic collaboration coordinator
+
+`CollaborationCoordinatorSession` is the transport-independent ingress boundary for signed collaboration batches. It wraps `TrustedTransitionSession`, derives the exact `media.operation-batch.v1` signing context, and commits trust replay state together with graph/log state through one injected persistence callback.
+
+For a batch anchored at the current journal head, the coordinator applies each validated transaction with the normal graph operation engine, appends the already-signed operation-log entries, validates the resulting checksum chain, then publishes graph/log/trust state only after the atomic persistence callback succeeds. Signature failure never invokes the graph transition, and application or persistence failure leaves both the project and nonce state unchanged.
+
+For authenticated stale/forked input, the coordinator runs the existing deterministic rebase/conflict classifier and leaves graph/log state unchanged. The authenticated request nonce is still committed with that response, preventing replay of the same signed request. `rebase-safe` remains a proposal only: the client must rebuild against the current head and sign a new batch.
+
+The coordinator intentionally defines no socket, HTTP route or account session. A future transport adapter should parse bounded envelopes, call this single ingress method, and serialize the returned `applied`, `rebase-safe`, `conflict`, `different-base` or `different-history` result without acquiring independent mutation authority.
+
 ## Deliberate boundary
 
 This is not yet a complete collaboration protocol. Media does **not** yet define network transport, account/session authentication, authenticated administrative enrollment UI, presence, permissions or server persistence. Key distribution/rotation and account authorization remain deployment responsibilities.
