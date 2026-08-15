@@ -1,0 +1,95 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { assertAgentPlanMatchesGraph } from '../src/agent-plan.js';
+import { AGENT_WORKFLOW_SCHEMA, MAX_AGENT_WORKFLOW_TASKS } from '../src/agent-workflow.js';
+import { createCreativeObjectOperations } from '../src/creative-object.js';
+import { createGraph } from '../src/graph.js';
+import { ModelRouter } from '../src/model-router.js';
+import { applyOperations } from '../src/operations.js';
+import {
+  assertWorkflowPlannerResult,
+  createModelRouterWorkflowProvider,
+  createWorkflowPlannerProvider,
+  proposeAgentWorkflowWithProvider,
+} from '../src/providers.js';
+
+test('workflow provider produces a graph-bound Agent workflow without putting task semantics in plan metadata', async () => {
+  const graph = createGraph('Workflow proposal');
+  const provider = createWorkflowPlannerProvider({
+    id: 'workflow-test',
+    label: 'Workflow Test',
+    proposeWorkflow: async ({ intent, context }) => ({
+      summary: `Delegate ${intent}`,
+      operations: [],
+      tasks: [{ id: 'enrich', kind: 'semantic-enrichment', payload: { sourceNodeIds: [] } }],
+      metadata: { requestClass: context.requestClass },
+    }),
+  });
+  const workflow = await proposeAgentWorkflowWithProvider(provider, graph, ' enrich the project ', { requestClass: 'semantic' });
+  assert.equal(workflow.schema, AGENT_WORKFLOW_SCHEMA);
+  assert.equal(workflow.plan.intent, 'enrich the project');
+  assert.equal(workflow.plan.provider.id, 'workflow-test');
+  assert.equal(workflow.tasks.length, 1);
+  assert.equal(workflow.tasks[0].kind, 'semantic-enrichment');
+  assertAgentPlanMatchesGraph(graph, workflow.plan);
+  assert.equal(workflow.plan.metadata.workflowPlanner.requestClass, 'semantic');
+  assert.equal(JSON.stringify(workflow.plan.metadata).includes('semantic-enrichment'), false);
+});
+
+test('workflow provider rejects invalid task semantics and DAG dependencies before execution', async () => {
+  const graph = createGraph('Invalid workflow');
+  const providerFor = (tasks) => createWorkflowPlannerProvider({ id: 'invalid', proposeWorkflow: async () => ({ summary: 'Invalid', operations: [], tasks }) });
+  await assert.rejects(() => proposeAgentWorkflowWithProvider(providerFor([{ id: 'x', kind: 'unknown', payload: {} }]), graph, 'delegate'), /Unsupported Agent workflow task kind/);
+  await assert.rejects(() => proposeAgentWorkflowWithProvider(providerFor([{ id: 'x', kind: 'generate-media', dependsOn: ['missing'], payload: { operation: 'generate-image' } }]), graph, 'delegate'), /Unknown pipeline dependency/);
+  await assert.rejects(() => proposeAgentWorkflowWithProvider(providerFor([{ id: 'x', kind: 'generate-media', payload: { operation: 'plan' } }]), graph, 'delegate'), /Unsupported Agent generate-media operation/);
+});
+
+test('workflow planner result enforces task and canonical byte bounds', () => {
+  assert.throws(() => assertWorkflowPlannerResult({ summary: 'Too many', operations: [], tasks: Array.from({ length: MAX_AGENT_WORKFLOW_TASKS + 1 }, (_, index) => ({ id: String(index) })) }), /exceeds 256 tasks/);
+  assert.throws(() => assertWorkflowPlannerResult({ summary: 'Unsafe', operations: [], tasks: [], metadata: { value: 1n } }), /JSON|serialize|BigInt/i);
+  assert.throws(() => assertWorkflowPlannerResult({ summary: 'Large', operations: [], tasks: [{ id: 'x', payload: { text: 'x'.repeat(2048) } }] }, { maxResultBytes: 512 }), /exceeds 512 bytes/);
+});
+
+test('model-router workflow provider uses bounded privacy-safe semantic context and records routing provenance', async () => {
+  let graph = createGraph('Privacy workflow');
+  const visibleOps = createCreativeObjectOperations(graph, { name: 'Maya Visible', objectType: 'person' });
+  graph = applyOperations(graph, visibleOps);
+  const hiddenOps = createCreativeObjectOperations(graph, { name: 'Secret Person', objectType: 'person', semantics: { secret: 'never send' }, permissions: { modelAccess: 'none' } });
+  graph = applyOperations(graph, hiddenOps);
+  const visibleId = visibleOps[0].node.id;
+  const hiddenId = hiddenOps[0].node.id;
+  let captured = null;
+  const router = new ModelRouter().register({
+    id: 'workflow-backend',
+    operations: ['plan-workflow'],
+    location: 'local',
+    invoke: async (operation, input, options) => {
+      captured = { operation, input, context: options.context };
+      return {
+        summary: 'Enrich Maya',
+        operations: [],
+        tasks: [{ id: 'enrich', kind: 'semantic-enrichment', payload: { sourceNodeIds: [visibleId] } }],
+      };
+    },
+  });
+  const provider = createModelRouterWorkflowProvider({ router, contextMode: 'semantic', semanticContextOptions: { limit: 4, maxNodes: 8 } });
+  const workflow = await proposeAgentWorkflowWithProvider(provider, graph, 'enrich Maya');
+  assert.equal(captured.operation, 'plan-workflow');
+  assert.ok(captured.input.graph.nodes[visibleId]);
+  assert.equal(captured.input.graph.nodes[hiddenId], undefined);
+  assert.equal(JSON.stringify(captured.input).includes('never send'), false);
+  assert.equal(captured.context.contextMode, 'semantic');
+  assert.equal(workflow.plan.metadata.workflowPlanner.routing.backendId, 'workflow-backend');
+  assert.deepEqual(workflow.plan.metadata.workflowPlanner.routing.semanticMatchIds, [visibleId]);
+});
+
+test('model-router workflow planning honors abort before backend invocation', async () => {
+  const graph = createGraph('Abort workflow');
+  let calls = 0;
+  const router = new ModelRouter().register({ id: 'workflow-backend', operations: ['plan-workflow'], invoke: async () => { calls += 1; return { summary: 'x', operations: [], tasks: [] }; } });
+  const provider = createModelRouterWorkflowProvider({ router });
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(() => proposeAgentWorkflowWithProvider(provider, graph, 'delegate', {}, { signal: controller.signal }), (error) => error?.name === 'AbortError');
+  assert.equal(calls, 0);
+});

@@ -1,4 +1,5 @@
 import { createAgentPlan } from "./agent-plan.js";
+import { createAgentWorkflow, MAX_AGENT_WORKFLOW_BYTES, MAX_AGENT_WORKFLOW_TASKS } from "./agent-workflow.js";
 import { canonicalOperationLogJson } from "./operation-log.js";
 import { assertValidOperation } from "./operations.js";
 import { planIntent } from "./planner.js";
@@ -18,6 +19,12 @@ function requireProvider(provider) {
   if (!provider || typeof provider !== "object") throw new Error("Planner provider must be an object");
   if (typeof provider.id !== "string" || !provider.id) throw new Error("Planner provider requires an id");
   if (typeof provider.plan !== "function") throw new Error(`Planner provider ${provider.id} requires a plan function`);
+  return provider;
+}
+function requireWorkflowProvider(provider) {
+  if (!provider || typeof provider !== "object") throw new Error("Workflow provider must be an object");
+  if (typeof provider.id !== "string" || !provider.id) throw new Error("Workflow provider requires an id");
+  if (typeof provider.proposeWorkflow !== "function") throw new Error(`Workflow provider ${provider.id} requires a proposeWorkflow function`);
   return provider;
 }
 
@@ -41,6 +48,42 @@ export function assertPlannerResult(result, { maxResultBytes = DEFAULT_PLANNER_R
 
 export function createPlannerProvider({ id, label = id, capabilities = ["plan"], plan }) {
   return requireProvider({ id, label, capabilities: [...capabilities], plan });
+}
+
+export function assertWorkflowPlannerResult(result, { maxResultBytes = MAX_AGENT_WORKFLOW_BYTES } = {}) {
+  if (!result || typeof result !== "object" || Array.isArray(result)) throw new Error("Workflow planner result must be an object");
+  const planner = assertPlannerResult({ summary: result.summary, operations: result.operations, ...(result.metadata !== undefined ? { metadata: result.metadata } : {}) }, { maxResultBytes });
+  if (!Array.isArray(result.tasks)) throw new Error("Workflow planner result requires a tasks array");
+  if (result.tasks.length > MAX_AGENT_WORKFLOW_TASKS) throw new Error(`Workflow planner result exceeds ${MAX_AGENT_WORKFLOW_TASKS} tasks`);
+  const normalized = { ...planner, tasks: result.tasks };
+  const canonical = canonicalOperationLogJson(normalized);
+  const byteLimit = boundedPositive(maxResultBytes, MAX_AGENT_WORKFLOW_BYTES);
+  if (utf8Bytes(canonical) > byteLimit) throw new Error(`Workflow planner result exceeds ${byteLimit} bytes`);
+  return JSON.parse(canonical);
+}
+
+export function createWorkflowPlannerProvider({ id, label = id, capabilities = ["workflow"], proposeWorkflow }) {
+  return requireWorkflowProvider({ id, label, capabilities: [...capabilities], proposeWorkflow });
+}
+
+export async function proposeAgentWorkflowWithProvider(provider, graph, intent, context = {}, options = {}) {
+  const valid = requireWorkflowProvider(provider);
+  if (typeof intent !== "string" || !intent.trim()) throw new Error("Workflow planner intent must be non-empty");
+  const cleanIntent = intent.trim();
+  const { signal, ...validationOptions } = options;
+  const result = assertWorkflowPlannerResult(await valid.proposeWorkflow({ graph, intent: cleanIntent, context, signal }), validationOptions);
+  const plan = createAgentPlan(graph, {
+    intent: cleanIntent,
+    summary: result.summary,
+    operations: result.operations,
+    providerId: valid.id,
+    providerLabel: valid.label ?? valid.id,
+    metadata: {
+      providerCapabilities: [...(valid.capabilities ?? [])],
+      ...(result.metadata ? { workflowPlanner: result.metadata } : {}),
+    },
+  });
+  return createAgentWorkflow(plan, result.tasks);
 }
 
 export function createLocalPlannerProvider() {
@@ -94,6 +137,47 @@ export function createModelRouterPlannerProvider({
         semanticMatches: routedContext.matches,
       }, { policy, context: { plannerProviderId: id, contextMode } });
       const result = assertPlannerResult(routed.output);
+      return {
+        ...result,
+        metadata: {
+          ...(result.metadata ?? {}),
+          routing: {
+            backendId: routed.backendId,
+            attempts: routed.attempts.slice(0, 32),
+            contextMode,
+            semanticMatchIds: routedContext.matches.map((match) => match.id).slice(0, 32),
+          },
+        },
+      };
+    },
+  });
+}
+
+export function createModelRouterWorkflowProvider({
+  router,
+  id = "workflow-models",
+  label = "Model router workflow planner",
+  policy = {},
+  contextMode = "semantic",
+  semanticContextOptions = {},
+} = {}) {
+  if (!router || typeof router.execute !== "function") throw new Error("Model router workflow planner requires a router");
+  if (!["full", "semantic"].includes(contextMode)) throw new Error(`Unsupported model workflow context mode: ${contextMode}`);
+  return createWorkflowPlannerProvider({
+    id,
+    label,
+    capabilities: ["workflow", "model-router", contextMode === "semantic" ? "semantic-context" : "full-context"],
+    proposeWorkflow: async ({ graph, intent, context, signal }) => {
+      const routedContext = contextMode === "semantic"
+        ? createPlannerSemanticContext(graph, intent, semanticContextOptions)
+        : { graph: createPlannerSnapshot(graph), matches: [] };
+      const routed = await router.execute("plan-workflow", {
+        graph: routedContext.graph,
+        intent,
+        context,
+        semanticMatches: routedContext.matches,
+      }, { signal, policy, context: { workflowProviderId: id, contextMode } });
+      const result = assertWorkflowPlannerResult(routed.output);
       return {
         ...result,
         metadata: {
