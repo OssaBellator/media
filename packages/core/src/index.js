@@ -42,6 +42,7 @@ export * from './trust-registry.js';
 export * from './trusted-transition.js';
 export * from './agent-plan.js';
 export * from './agent-review.js';
+export * from './agent-rebase.js';
 export * from './creative-object.js';
 export * from './semantic-search.js';
 export * from './model-router.js';
