@@ -10,6 +10,8 @@ export const MAX_MODEL_ROUTING_BACKEND_ID_CHARS = 160;
 export const MAX_MODEL_ROUTER_OPTIONS_BYTES = 64 * 1024;
 export const MAX_MODEL_BACKEND_LABEL_CHARS = 256;
 export const MAX_MODEL_BACKEND_METADATA_BYTES = 64 * 1024;
+export const MAX_MODEL_ROUTER_BACKENDS = 256;
+export const MAX_MODEL_ATTEMPT_REASON_CHARS = 512;
 const MODEL_OPERATION_SET = new Set(MODEL_OPERATIONS);
 const MODEL_DATA_POLICY_SET = new Set(MODEL_DATA_POLICIES);
 const MODEL_ROUTING_POLICY_KEYS = new Set(['allowedBackendIds', 'deniedBackendIds', 'maxCostTier', 'dataPolicy', 'preferLocal']);
@@ -54,6 +56,47 @@ function deepFreezeJson(value) {
   if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value;
   for (const child of Object.values(value)) deepFreezeJson(child);
   return Object.freeze(value);
+}
+function boundedUnsupportedReason(value) {
+  if (typeof value !== 'string') return 'unsupported';
+  const clean = value.trim() || 'unsupported';
+  return clean.slice(0, MAX_MODEL_ATTEMPT_REASON_CHARS);
+}
+function unsupportedReasonFromResult(result) {
+  if (!result || typeof result !== 'object') return null;
+  const supported = Object.getOwnPropertyDescriptor(result, 'supported');
+  if (!supported || !('value' in supported) || supported.value !== false) return null;
+  const reason = Object.getOwnPropertyDescriptor(result, 'reason');
+  return boundedUnsupportedReason(reason && 'value' in reason ? reason.value : undefined);
+}
+function outputFromResult(result) {
+  if (!result || typeof result !== 'object') return result;
+  const output = Object.getOwnPropertyDescriptor(result, 'output');
+  return output && 'value' in output && output.value != null ? output.value : result;
+}
+function safeBackendErrorMessage(error) {
+  if (typeof error === 'string') return error.slice(0, MAX_MODEL_ATTEMPT_REASON_CHARS) || 'Model backend failed';
+  if (!error || (typeof error !== 'object' && typeof error !== 'function')) return 'Model backend failed';
+  const message = Object.getOwnPropertyDescriptor(error, 'message');
+  return message && 'value' in message && typeof message.value === 'string'
+    ? (message.value.slice(0, MAX_MODEL_ATTEMPT_REASON_CHARS) || 'Model backend failed')
+    : 'Model backend failed';
+}
+function tagBackendError(error, backendId) {
+  if (error && (typeof error === 'object' || typeof error === 'function') && Object.isExtensible(error)) {
+    const descriptor = Object.getOwnPropertyDescriptor(error, 'modelBackendId');
+    if (!descriptor || descriptor.configurable || ('value' in descriptor && descriptor.writable)) {
+      try {
+        Object.defineProperty(error, 'modelBackendId', { value: backendId, enumerable: false, writable: true, configurable: true });
+        return error;
+      } catch {}
+    }
+  }
+  const wrapped = new Error(safeBackendErrorMessage(error), { cause: error });
+  wrapped.name = 'ModelBackendError';
+  wrapped.code = 'MODEL_BACKEND_FAILED';
+  wrapped.modelBackendId = backendId;
+  return wrapped;
 }
 function normalizeDataPolicy(value = 'any') {
   if (!MODEL_DATA_POLICY_SET.has(value)) throw new Error(`Unsupported model data policy: ${value}`);
@@ -108,12 +151,12 @@ export class ModelUnsupportedError extends Error {
     this.name = 'ModelUnsupportedError';
     this.code = 'MODEL_UNSUPPORTED';
     this.operation = operation;
-    this.attempts = attempts;
+    this.attempts = Object.freeze([...attempts]);
   }
 }
 
 export function unsupportedModelResult(reason = 'unsupported') {
-  return { supported: false, reason: String(reason) };
+  return Object.freeze({ supported: false, reason: boundedUnsupportedReason(reason) });
 }
 
 export function createModelBackend(config = {}) {
@@ -147,6 +190,7 @@ export class ModelRouter {
 
   register(backend) {
     const valid = createModelBackend(backend);
+    if (!this.#backends.has(valid.id) && this.#backends.size >= MAX_MODEL_ROUTER_BACKENDS) throw new Error(`Model router exceeds ${MAX_MODEL_ROUTER_BACKENDS} backends`);
     this.#backends.set(valid.id, valid);
     return this;
   }
@@ -175,15 +219,15 @@ export class ModelRouter {
       try {
         result = await backend.invoke(operation, input, { signal, context: cleanContext, backend });
       } catch (error) {
-        error.modelBackendId ??= backend.id;
-        throw error;
+        throw tagBackendError(error, backend.id);
       }
-      if (result?.supported === false) {
-        attempts.push({ backendId: backend.id, supported: false, reason: String(result.reason ?? 'unsupported') });
+      const unsupportedReason = unsupportedReasonFromResult(result);
+      if (unsupportedReason != null) {
+        attempts.push(Object.freeze({ backendId: backend.id, supported: false, reason: unsupportedReason }));
         continue;
       }
-      attempts.push({ backendId: backend.id, supported: true });
-      return { backendId: backend.id, backend, output: result?.output ?? result, attempts };
+      attempts.push(Object.freeze({ backendId: backend.id, supported: true }));
+      return { backendId: backend.id, backend, output: outputFromResult(result), attempts: Object.freeze([...attempts]) };
     }
     throw new ModelUnsupportedError(operation, attempts);
   }

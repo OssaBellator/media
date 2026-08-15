@@ -3,6 +3,8 @@ import test from 'node:test';
 import {
   MAX_MODEL_BACKEND_LABEL_CHARS,
   MAX_MODEL_BACKEND_METADATA_BYTES,
+  MAX_MODEL_ATTEMPT_REASON_CHARS,
+  MAX_MODEL_ROUTER_BACKENDS,
   MAX_MODEL_ROUTER_OPTIONS_BYTES,
   MAX_MODEL_ROUTING_BACKEND_ID_CHARS,
   MAX_MODEL_ROUTING_BACKEND_IDS,
@@ -159,4 +161,67 @@ test('model backend descriptor bounds identity and metadata and exposes only det
   metadata.nested.version = 2;
   metadata.tags.push('changed');
   assert.deepEqual(backend.metadata, { family: 'local', nested: { version: 1 }, tags: ['fast'] });
+});
+
+
+test('model router bounds unique backend registration while allowing replacement', () => {
+  const router = new ModelRouter();
+  for (let index = 0; index < MAX_MODEL_ROUTER_BACKENDS; index += 1) router.register({ id: `backend-${index}`, operations: ['plan'], invoke: async () => ({}) });
+  assert.equal(router.list('plan').length, MAX_MODEL_ROUTER_BACKENDS);
+  assert.throws(() => router.register({ id: 'overflow', operations: ['plan'], invoke: async () => ({}) }), /exceeds 256 backends/);
+  assert.doesNotThrow(() => router.register({ id: 'backend-0', operations: ['plan'], priority: 9, invoke: async () => ({}) }));
+  assert.equal(router.list('plan').length, MAX_MODEL_ROUTER_BACKENDS);
+});
+
+test('model routing bounds unsupported provenance without executing reason or output accessors', async () => {
+  let coercions = 0;
+  const helper = unsupportedModelResult({ toString() { coercions += 1; return 'unsafe'; } });
+  assert.deepEqual(helper, { supported: false, reason: 'unsupported' });
+  assert.equal(coercions, 0);
+  assert.equal(Object.isFrozen(helper), true);
+
+  let reasonGetterCalls = 0;
+  let outputGetterCalls = 0;
+  const finalResult = {};
+  Object.defineProperty(finalResult, 'output', { enumerable: true, get() { outputGetterCalls += 1; return 'unsafe'; } });
+  const router = new ModelRouter()
+    .register({ id: 'first', operations: ['plan'], priority: 2, invoke: async () => {
+      const result = { supported: false };
+      Object.defineProperty(result, 'reason', { enumerable: true, get() { reasonGetterCalls += 1; return 'secret'; } });
+      return result;
+    } })
+    .register({ id: 'second', operations: ['plan'], priority: 1, invoke: async () => finalResult });
+  const routed = await router.execute('plan', {});
+  assert.equal(reasonGetterCalls, 0);
+  assert.equal(outputGetterCalls, 0);
+  assert.equal(routed.output, finalResult);
+  assert.deepEqual(routed.attempts, [{ backendId: 'first', supported: false, reason: 'unsupported' }, { backendId: 'second', supported: true }]);
+  assert.equal(Object.isFrozen(routed.attempts), true);
+  assert.equal(Object.isFrozen(routed.attempts[0]), true);
+});
+
+test('unsupported terminal errors retain only bounded frozen routing attempts', async () => {
+  const router = new ModelRouter().register({ id: 'only', operations: ['plan'], invoke: async () => ({ supported: false, reason: 'x'.repeat(MAX_MODEL_ATTEMPT_REASON_CHARS + 100) }) });
+  await assert.rejects(() => router.execute('plan', {}), (error) => {
+    assert.equal(error instanceof ModelUnsupportedError, true);
+    assert.equal(error.attempts.length, 1);
+    assert.equal(error.attempts[0].reason.length, MAX_MODEL_ATTEMPT_REASON_CHARS);
+    assert.equal(Object.isFrozen(error.attempts), true);
+    assert.equal(Object.isFrozen(error.attempts[0]), true);
+    return true;
+  });
+});
+
+test('model backend failures keep authoritative bounded attribution for mutable frozen and primitive throws', async () => {
+  const forged = new Error('mutable');
+  forged.modelBackendId = 'forged';
+  const mutable = new ModelRouter().register({ id: 'actual', operations: ['plan'], invoke: async () => { throw forged; } });
+  await assert.rejects(() => mutable.execute('plan', {}), (error) => error === forged && error.modelBackendId === 'actual');
+
+  const frozen = Object.freeze(new Error('frozen failure'));
+  const frozenRouter = new ModelRouter().register({ id: 'frozen-backend', operations: ['plan'], invoke: async () => { throw frozen; } });
+  await assert.rejects(() => frozenRouter.execute('plan', {}), (error) => error.name === 'ModelBackendError' && error.code === 'MODEL_BACKEND_FAILED' && error.modelBackendId === 'frozen-backend' && error.message === 'frozen failure' && error.cause === frozen);
+
+  const primitive = new ModelRouter().register({ id: 'primitive', operations: ['plan'], invoke: async () => { throw 'p'.repeat(MAX_MODEL_ATTEMPT_REASON_CHARS + 50); } });
+  await assert.rejects(() => primitive.execute('plan', {}), (error) => error.name === 'ModelBackendError' && error.modelBackendId === 'primitive' && error.message.length === MAX_MODEL_ATTEMPT_REASON_CHARS);
 });
