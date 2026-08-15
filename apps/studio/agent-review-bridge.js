@@ -73,7 +73,7 @@ function interceptAgentEdit(record, label, operations, metadata) {
     metadata: { studioReviewBridge: true },
   });
   record.proposalSession.adopt(plan);
-  queueReviewRefresh();
+  scheduleReviewRefresh();
   return Promise.resolve(proposalNoOp(record.historySession));
 }
 
@@ -96,6 +96,10 @@ function queueReviewRefresh() {
   if (refreshQueued) return;
   refreshQueued = true;
   queueMicrotask(refreshReview);
+}
+
+function scheduleReviewRefresh() {
+  setTimeout(queueReviewRefresh, 0);
 }
 
 function rerenderStudio() {
@@ -138,6 +142,7 @@ function revisePending(root) {
 }
 
 function handleReviewClick(event) {
+  if (event.target?.closest?.('[data-workspace="agent"]')) scheduleReviewRefresh();
   const root = reviewRoot();
   if (!root) return;
   const apply = event.target?.closest?.('[data-agent-apply]');
@@ -170,8 +175,5 @@ export function installStudioAgentReviewBridge() {
   };
   globalThis.document?.addEventListener?.('click', handleReviewClick, true);
   globalThis.document?.addEventListener?.('change', handleReviewSelection, true);
-  if (globalThis.MutationObserver && globalThis.document?.documentElement) {
-    new MutationObserver(queueReviewRefresh).observe(globalThis.document.documentElement, { childList: true, subtree: true });
-  }
-  queueReviewRefresh();
+  scheduleReviewRefresh();
 }
