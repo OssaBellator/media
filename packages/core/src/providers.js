@@ -1,5 +1,6 @@
 import { createAgentPlan } from "./agent-plan.js";
 import { createAgentWorkflow, MAX_AGENT_WORKFLOW_BYTES, MAX_AGENT_WORKFLOW_TASKS } from "./agent-workflow.js";
+import { normalizeBoundedModelJsonObject } from "./model-input.js";
 import { canonicalOperationLogJson } from "./operation-log.js";
 import { assertValidOperation } from "./operations.js";
 import { planIntent } from "./planner.js";
@@ -20,13 +21,8 @@ export function normalizePlannerIntent(intent, label = "Planner intent") {
   return clean;
 }
 export function normalizePlannerContext(context = {}, { maxContextBytes = DEFAULT_PLANNER_CONTEXT_BYTES } = {}) {
-  if (!context || typeof context !== "object" || Array.isArray(context)) throw new Error("Planner context must be an object");
-  let canonical;
-  try { canonical = canonicalOperationLogJson(context); }
-  catch (error) { throw new Error(`Planner context must be JSON-safe: ${error.message}`, { cause: error }); }
   const byteLimit = boundedPositive(maxContextBytes, DEFAULT_PLANNER_CONTEXT_BYTES);
-  if (utf8Bytes(canonical) > byteLimit) throw new Error(`Planner context exceeds ${byteLimit} bytes`);
-  return JSON.parse(canonical);
+  return normalizeBoundedModelJsonObject(context, "Planner context", { maxBytes: byteLimit });
 }
 function boundedPositive(value, fallback, minimum = 256) {
   const number = Number(value);

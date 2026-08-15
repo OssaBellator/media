@@ -49,12 +49,18 @@ test('bounded model input defines __proto__ as data instead of mutating clone pr
   assert.equal({}.polluted, undefined);
 });
 
-test('bounded model JSON options are canonical clones and reject unsafe or oversized values', () => {
+test('bounded model JSON options are canonical inert clones and reject unsafe or oversized values', () => {
   const value = { b: 2, a: { nested: true } };
   const clean = normalizeBoundedModelJsonObject(value, 'Options', { maxBytes: 1024 });
   assert.deepEqual(clean, value);
   assert.notEqual(clean, value);
   assert.notEqual(clean.a, value.a);
+  let getterCalls = 0;
+  const accessor = {};
+  Object.defineProperty(accessor, 'secret', { enumerable: true, get() { getterCalls += 1; return 'leak'; } });
+  assert.throws(() => normalizeBoundedModelJsonObject(accessor, 'Options'), /JSON-safe.*enumerable data properties only/i);
+  assert.equal(getterCalls, 0);
+  assert.throws(() => normalizeBoundedModelJsonObject({ bytes: new Uint8Array([1]) }, 'Options'), /JSON-safe.*binary data/i);
   assert.throws(() => normalizeBoundedModelJsonObject({ unsafe: 1n }, 'Options'), /JSON-safe/);
   assert.throws(() => normalizeBoundedModelJsonObject({ huge: 'x'.repeat(100) }, 'Options', { maxBytes: 32 }), /exceeds 32 bytes/);
 });

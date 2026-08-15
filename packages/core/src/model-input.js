@@ -38,10 +38,13 @@ function copyView(value, label) {
 
 export function normalizeBoundedModelJsonObject(value = {}, label = 'Model options', { maxBytes = DEFAULT_MODEL_OPTIONS_BYTES } = {}) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${label} must be an object`);
-  let canonical;
-  try { canonical = canonicalOperationLogJson(value); }
-  catch (error) { throw new Error(`${label} must be JSON-safe: ${error.message}`, { cause: error }); }
   const limit = boundedPositive(maxBytes, DEFAULT_MODEL_OPTIONS_BYTES);
+  let safe;
+  try { safe = normalizeBoundedModelInput(value, label, { maxBytes: limit, allowBinary: false }); }
+  catch (error) { throw new Error(`${label} must be JSON-safe: ${error.message}`, { cause: error }); }
+  let canonical;
+  try { canonical = canonicalOperationLogJson(safe); }
+  catch (error) { throw new Error(`${label} must be JSON-safe: ${error.message}`, { cause: error }); }
   if (textBytes(canonical) > limit) throw new Error(`${label} exceeds ${limit} bytes`);
   return JSON.parse(canonical);
 }
@@ -50,6 +53,7 @@ export function normalizeBoundedModelInput(value = {}, label = 'Model input', {
   maxBytes = DEFAULT_MODEL_INPUT_BYTES,
   maxDepth = MAX_MODEL_INPUT_DEPTH,
   maxEntries = MAX_MODEL_INPUT_ENTRIES,
+  allowBinary = true,
 } = {}) {
   const byteLimit = boundedPositive(maxBytes, DEFAULT_MODEL_INPUT_BYTES);
   const depthLimit = boundedPositive(maxDepth, MAX_MODEL_INPUT_DEPTH);
@@ -80,14 +84,17 @@ export function normalizeBoundedModelInput(value = {}, label = 'Model input', {
     if (typeof input !== 'object') throw new Error(`${label} contains unsupported ${typeof input} data`);
     if (isSharedBuffer(input)) throw new Error(`${label} cannot contain SharedArrayBuffer`);
     if (input instanceof ArrayBuffer) {
+      if (!allowBinary) throw new Error(`${label} cannot contain binary data`);
       consume(input.byteLength);
       return input.slice(0);
     }
     if (ArrayBuffer.isView(input)) {
+      if (!allowBinary) throw new Error(`${label} cannot contain binary data`);
       consume(input.byteLength);
       return copyView(input, label);
     }
     if (typeof Blob === 'function' && input instanceof Blob) {
+      if (!allowBinary) throw new Error(`${label} cannot contain binary data`);
       consume(input.size);
       return input.slice(0, input.size, input.type);
     }

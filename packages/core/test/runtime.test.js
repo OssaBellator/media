@@ -73,6 +73,11 @@ test("planner context is canonical JSON-safe and bounded before provider invocat
   assert.notEqual(receivedContext.nested, context.nested);
   await assert.rejects(() => planWithProvider(provider, createMediaProject(), "inspect", { huge: "x".repeat(400) }, { maxContextBytes: 256 }), /context exceeds 256 bytes/);
   await assert.rejects(() => planWithProvider(provider, createMediaProject(), "inspect", { unsafe: 1n }), /context must be JSON-safe/i);
+  let getterCalls = 0;
+  const accessor = {};
+  Object.defineProperty(accessor, "secret", { enumerable: true, get() { getterCalls += 1; return "leak"; } });
+  await assert.rejects(() => planWithProvider(provider, createMediaProject(), "inspect", accessor), /context must be JSON-safe/i);
+  assert.equal(getterCalls, 0);
   assert.equal(calls, 1);
 });
 
