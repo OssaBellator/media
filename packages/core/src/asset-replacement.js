@@ -14,6 +14,11 @@ function assertCompatibleAssets(source, replacement) {
   const replacementKind = mediaFamily(replacement.props?.mediaKind);
   if (sourceKind !== replacementKind) throw new Error(`Replacement asset media kind ${replacementKind} does not match source ${sourceKind}`);
 }
+function referenceEdgeFor(graph, nodeId, assetId) {
+  const edges = Object.values(graph.edges ?? {}).filter((edge) => edge.type === 'references' && edge.from === nodeId && edge.to === assetId);
+  if (edges.length !== 1) throw new Error(`Replacement consumer ${nodeId} must reference source asset ${assetId} exactly once`);
+  return edges[0];
+}
 
 export function assetReplacementConsumers(graph, assetId) {
   requireAsset(graph, assetId, 'Unknown replacement source asset');
@@ -43,14 +48,20 @@ export function resolveAssetReplacement(graph, {
       return node;
     });
   }
-  return { sourceAsset, replacementAsset, consumers };
+  const references = Object.fromEntries(consumers.map((node) => [node.id, referenceEdgeFor(graph, node.id, sourceAsset.id)]));
+  return { sourceAsset, replacementAsset, consumers, references };
 }
 
 export function createAssetReplacementOperations(graph, options = {}) {
   const resolved = resolveAssetReplacement(graph, options);
-  return resolved.consumers.map((node) => ({
-    type: 'node.update',
-    nodeId: node.id,
-    patch: { props: { assetId: resolved.replacementAsset.id } },
-  }));
+  const operations = [];
+  for (const node of resolved.consumers) {
+    const reference = resolved.references[node.id];
+    operations.push(
+      { type: 'node.update', nodeId: node.id, patch: { props: { assetId: resolved.replacementAsset.id } } },
+      { type: 'edge.remove', edgeId: reference.id },
+      { type: 'edge.add', edge: { ...reference, to: resolved.replacementAsset.id } },
+    );
+  }
+  return operations;
 }
