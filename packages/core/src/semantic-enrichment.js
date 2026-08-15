@@ -6,12 +6,17 @@ import {
   linkCreativeObjectOperations,
   updateCreativeObjectOperations,
 } from './creative-object.js';
+import { DEFAULT_MODEL_INPUT_BYTES, DEFAULT_MODEL_OPTIONS_BYTES, normalizeBoundedModelInput, normalizeBoundedModelJsonObject } from './model-input.js';
 import { createPlannerSnapshot } from './providers.js';
 
 export const SEMANTIC_ENRICHMENT_SCHEMA = 'media.semantic-enrichment.v1';
 export const MAX_SEMANTIC_ENRICHMENT_OBJECTS = 1024;
 export const MAX_SEMANTIC_ENRICHMENT_RELATIONSHIPS = 4096;
 export const MAX_SEMANTIC_ENRICHMENT_BYTES = 2 * 1024 * 1024;
+export const MAX_SEMANTIC_MODEL_SOURCE_IDS = 1024;
+export const MAX_SEMANTIC_MODEL_SOURCE_ID_CHARS = 512;
+export const MAX_SEMANTIC_MODEL_INPUT_BYTES = DEFAULT_MODEL_INPUT_BYTES;
+export const MAX_SEMANTIC_MODEL_OPTIONS_BYTES = DEFAULT_MODEL_OPTIONS_BYTES;
 
 function requireString(value, label) {
   if (typeof value !== 'string' || !value.trim()) throw new Error(`${label} must be a non-empty string`);
@@ -23,10 +28,20 @@ function cloneJson(value, label) {
 }
 function utf8Bytes(value) { return new TextEncoder().encode(value).byteLength; }
 function normalizePermissions(value = {}) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Semantic enrichment permissions must be an object');
-  const access = value.modelAccess ?? 'full';
+  const clean = normalizeBoundedModelJsonObject(value, 'Semantic enrichment permissions', { maxBytes: MAX_SEMANTIC_MODEL_OPTIONS_BYTES });
+  const access = clean.modelAccess ?? 'full';
   if (!['full', 'metadata', 'none'].includes(access)) throw new Error(`Unsupported semantic enrichment modelAccess: ${access}`);
-  return { ...cloneJson(value, 'Semantic enrichment permissions'), modelAccess: access };
+  return { ...clean, modelAccess: access };
+}
+function normalizeModelSourceIds(values) {
+  if (!Array.isArray(values)) throw new Error('Semantic enrichment sourceNodeIds must be an array');
+  if (values.length > MAX_SEMANTIC_MODEL_SOURCE_IDS) throw new Error(`Semantic enrichment sourceNodeIds exceeds ${MAX_SEMANTIC_MODEL_SOURCE_IDS} ids`);
+  return [...new Set(values.map((value) => {
+    if (typeof value !== 'string' || !value.trim()) throw new Error('Semantic enrichment source id must be a non-empty string');
+    const id = value.trim();
+    if (id.length > MAX_SEMANTIC_MODEL_SOURCE_ID_CHARS) throw new Error(`Semantic enrichment source id exceeds ${MAX_SEMANTIC_MODEL_SOURCE_ID_CHARS} characters`);
+    return id;
+  }))];
 }
 
 export function assertSemanticEnrichment(result, { maxBytes = MAX_SEMANTIC_ENRICHMENT_BYTES } = {}) {
@@ -169,15 +184,18 @@ export async function runSemanticEnrichmentModel(router, graph, {
   signal,
 } = {}) {
   if (!router || typeof router.execute !== 'function') throw new Error('Semantic enrichment requires a model router');
-  if (!Array.isArray(sourceNodeIds)) throw new Error('Semantic enrichment sourceNodeIds must be an array');
-  const sources = [...new Set(sourceNodeIds.map((id) => requireString(String(id), 'Semantic enrichment source id')))];
+  const sources = normalizeModelSourceIds(sourceNodeIds);
   for (const id of sources) if (!graph.nodes[id]) throw new Error(`Unknown semantic enrichment source node: ${id}`);
   const sourceGraph = createPlannerSnapshot(graph, { focusNodeIds: sources, neighborDepth: 0, maxNodes: sources.length + 1 });
   for (const id of sources) if (graph.nodes[id]?.kind === 'object' && !sourceGraph.nodes[id]) throw new Error(`Creative object ${id} does not permit model access`);
-  const routed = await router.execute('analyze-media', { sourceGraph, input: modelInput }, { signal, policy, context });
+  const cleanModelInput = normalizeBoundedModelInput(modelInput, 'Semantic enrichment model input', { maxBytes: MAX_SEMANTIC_MODEL_INPUT_BYTES });
+  const cleanPolicy = normalizeBoundedModelJsonObject(policy, 'Semantic enrichment model policy', { maxBytes: MAX_SEMANTIC_MODEL_OPTIONS_BYTES });
+  const cleanContext = normalizeBoundedModelJsonObject(context, 'Semantic enrichment model context', { maxBytes: MAX_SEMANTIC_MODEL_OPTIONS_BYTES });
+  const cleanPermissions = normalizePermissions(permissions);
+  const routed = await router.execute('analyze-media', { sourceGraph, input: cleanModelInput }, { signal, policy: cleanPolicy, context: cleanContext });
   const enrichment = assertSemanticEnrichment(routed.output);
   const materialized = createSemanticEnrichmentOperations(graph, enrichment, {
-    permissions,
+    permissions: cleanPermissions,
     provenance: { source: 'model-analysis', backendId: routed.backendId, sourceNodeIds: sources },
   });
   return { backendId: routed.backendId, attempts: routed.attempts, enrichment, ...materialized };

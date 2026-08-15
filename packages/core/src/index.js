@@ -53,6 +53,7 @@ export * from './semantic-search.js';
 export * from './semantic-embedding.js';
 export * from './semantic-enrichment.js';
 export * from './model-router.js';
+export * from './model-input.js';
 export * from './planner.js';
 export * from './project.js';
 export * from './providers.js';

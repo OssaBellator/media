@@ -3,7 +3,7 @@ import test from 'node:test';
 import { createGraph, createNode, nodesByKind } from '../src/graph.js';
 import { applyOperations } from '../src/operations.js';
 import { ModelRouter } from '../src/model-router.js';
-import { createSemanticEnrichmentOperations, runSemanticEnrichmentModel } from '../src/semantic-enrichment.js';
+import { createSemanticEnrichmentOperations, MAX_SEMANTIC_MODEL_SOURCE_IDS, runSemanticEnrichmentModel } from '../src/semantic-enrichment.js';
 
 test('semantic enrichment materializes detected people as Creative Objects linked to source media', () => {
   let graph = createGraph('Film');
@@ -77,14 +77,31 @@ test('semantic enrichment keeps trusted provenance authoritative and rejects sem
   assert.throws(() => createSemanticEnrichmentOperations(graph, { objects: [{ name: 'Not Maya', objectType: 'product', semanticId: 'person:maya' }] }), /type mismatch/);
 });
 
+test('semantic enrichment rejects unsafe model inputs and options before backend invocation', async () => {
+  const graph = createGraph('Bounded enrichment');
+  let calls = 0;
+  const router = new ModelRouter().register({ id: 'vision', operations: ['analyze-media'], invoke: async () => { calls += 1; return { objects: [] }; } });
+  await assert.rejects(() => runSemanticEnrichmentModel(router, graph, { sourceNodeIds: Array.from({ length: MAX_SEMANTIC_MODEL_SOURCE_IDS + 1 }, (_, index) => `source-${index}`) }), /exceeds 1024 ids/);
+  await assert.rejects(() => runSemanticEnrichmentModel(router, graph, { modelInput: { callback() {} } }), /unsupported function data/);
+  await assert.rejects(() => runSemanticEnrichmentModel(router, graph, { context: { unsafe: 1n } }), /model context must be JSON-safe/);
+  await assert.rejects(() => runSemanticEnrichmentModel(router, graph, { policy: { unsafe: 1n } }), /model policy must be JSON-safe/);
+  await assert.rejects(() => runSemanticEnrichmentModel(router, graph, { permissions: { modelAccess: 'full', unsafe: 1n } }), /permissions must be JSON-safe/);
+  assert.equal(calls, 0);
+});
+
 test('routed semantic enrichment uses privacy-redacted source context and records backend provenance', async () => {
   let graph = createGraph('Film');
   const source = createNode({ id: 'source', kind: 'asset', name: 'Take.mp4', props: { mediaKind: 'video', mimeType: 'video/mp4', uri: 'private://take' } });
   graph = applyOperations(graph, [{ type: 'node.add', node: source }]);
   let input;
+  const sourceBytes = new Uint8Array([1]);
   const router = new ModelRouter().register({ id: 'vision', operations: ['analyze-media'], invoke: async (_operation, value) => { input = value; return { objects: [{ name: 'Maya', objectType: 'person', semanticId: 'person:maya', relationships: [{ targetId: source.id, role: 'appears-in' }] }] }; } });
-  const result = await runSemanticEnrichmentModel(router, graph, { sourceNodeIds: [source.id], modelInput: { bytes: new Uint8Array([1]) } });
+  const result = await runSemanticEnrichmentModel(router, graph, { sourceNodeIds: [source.id], modelInput: { bytes: sourceBytes } });
   assert.equal(input.sourceGraph.nodes.source.props.uri, undefined);
+  assert.ok(input.input.bytes instanceof Uint8Array);
+  assert.deepEqual([...input.input.bytes], [1]);
+  assert.notEqual(input.input.bytes, sourceBytes);
+  assert.notEqual(input.input.bytes.buffer, sourceBytes.buffer);
   assert.equal(result.backendId, 'vision');
   const next = applyOperations(graph, result.operations);
   const object = next.nodes[result.objectIds[0]];

@@ -4,7 +4,8 @@ import { createGraph, createNode } from '../src/graph.js';
 import { applyOperations } from '../src/operations.js';
 import { createCreativeObjectOperations } from '../src/creative-object.js';
 import { ModelRouter } from '../src/model-router.js';
-import { runGeneratedMediaModel } from '../src/generation-runner.js';
+import { MAX_GENERATION_CONTEXT_IDS, runGeneratedMediaModel } from '../src/generation-runner.js';
+import { MAX_GENERATION_INTENT_CHARS } from '../src/generated-media.js';
 
 test('generation runner routes a model result and returns graph operations while keeping payload ephemeral', async () => {
   let graph = createGraph('Film');
@@ -15,11 +16,28 @@ test('generation runner routes a model result and returns graph operations while
   const router = new ModelRouter().register({ id: 'image-model', operations: ['edit-image'], invoke: async (_operation, input) => { received = input; return { artifact: { name: 'Edited.png', mimeType: 'image/png', uri: 'memory://edited', size: 3 }, payload: bytes, metadata: { model: 'v1' } }; } });
   const result = await runGeneratedMediaModel(router, graph, { operation: 'edit-image', intent: 'Make it blue', sourceNodeIds: ['source'], modelInput: { pixels: bytes }, parentPlanId: 'plan-1' });
   assert.equal(received.sourceGraph.nodes.source.props.uri, undefined);
+  assert.ok(received.input.pixels instanceof Uint8Array);
+  assert.deepEqual([...received.input.pixels], [...bytes]);
+  assert.notEqual(received.input.pixels, bytes);
+  assert.notEqual(received.input.pixels.buffer, bytes.buffer);
   assert.equal(result.payload, bytes);
   assert.equal(result.asset.props.generation.parentPlanId, 'plan-1');
   assert.equal('payload' in result.asset.props.generation, false);
   const next = applyOperations(graph, result.operations);
   assert.ok(next.nodes[result.asset.id]);
+});
+
+test('generation runner rejects unbounded or executable inputs before backend invocation', async () => {
+  const graph = createGraph('Bounded generation');
+  let calls = 0;
+  const router = new ModelRouter().register({ id: 'model', operations: ['generate-image'], invoke: async () => { calls += 1; return { artifact: { name: 'x.png', mimeType: 'image/png' } }; } });
+  await assert.rejects(() => runGeneratedMediaModel(router, graph, { operation: 'generate-image', intent: 'x'.repeat(MAX_GENERATION_INTENT_CHARS + 1) }), /Generation intent exceeds/);
+  await assert.rejects(() => runGeneratedMediaModel(router, graph, { operation: 'generate-image', settings: { huge: 'x'.repeat(70 * 1024) } }), /Generation settings exceeds/);
+  await assert.rejects(() => runGeneratedMediaModel(router, graph, { operation: 'generate-image', context: { callback() {} } }), /Generation model context must be JSON-safe/);
+  await assert.rejects(() => runGeneratedMediaModel(router, graph, { operation: 'generate-image', policy: { unsafe: 1n } }), /Generation model policy must be JSON-safe/);
+  await assert.rejects(() => runGeneratedMediaModel(router, graph, { operation: 'generate-image', modelInput: { callback() {} } }), /unsupported function data/);
+  await assert.rejects(() => runGeneratedMediaModel(router, graph, { operation: 'generate-image', sourceNodeIds: Array.from({ length: MAX_GENERATION_CONTEXT_IDS + 1 }, (_, index) => `source-${index}`) }), /exceeds 1024 ids/);
+  assert.equal(calls, 0);
 });
 
 test('generation runner honors Creative Object model access before invoking a backend', async () => {
