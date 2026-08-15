@@ -194,8 +194,8 @@ export class ModelRouter {
     this.#backends.set(valid.id, valid);
     return this;
   }
-  unregister(id) { return this.#backends.delete(String(id)); }
-  get(id) { return this.#backends.get(String(id)) ?? null; }
+  unregister(id) { return this.#backends.delete(requireBoundedString(id, 'Model backend id', MAX_MODEL_ROUTING_BACKEND_ID_CHARS)); }
+  get(id) { return this.#backends.get(requireBoundedString(id, 'Model backend id', MAX_MODEL_ROUTING_BACKEND_ID_CHARS)) ?? null; }
   list(operation = null, policy = {}) {
     if (operation != null && !MODEL_OPERATION_SET.has(operation)) throw new Error(`Unsupported model operation: ${operation}`);
     const route = normalizeRoutingPolicy(policy);

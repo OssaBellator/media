@@ -225,3 +225,17 @@ test('model backend failures keep authoritative bounded attribution for mutable 
   const primitive = new ModelRouter().register({ id: 'primitive', operations: ['plan'], invoke: async () => { throw 'p'.repeat(MAX_MODEL_ATTEMPT_REASON_CHARS + 50); } });
   await assert.rejects(() => primitive.execute('plan', {}), (error) => error.name === 'ModelBackendError' && error.modelBackendId === 'primitive' && error.message.length === MAX_MODEL_ATTEMPT_REASON_CHARS);
 });
+
+
+test('model router lookup and removal require bounded string identities without coercion', () => {
+  const router = new ModelRouter().register({ id: 'safe', operations: ['plan'], invoke: async () => ({ summary: 'ok', operations: [] }) });
+  let coercions = 0;
+  const forged = { toString() { coercions += 1; return 'safe'; } };
+  assert.throws(() => router.get(forged), /Model backend id must be a non-empty string/);
+  assert.throws(() => router.unregister(forged), /Model backend id must be a non-empty string/);
+  assert.equal(coercions, 0);
+  assert.throws(() => router.get('x'.repeat(MAX_MODEL_ROUTING_BACKEND_ID_CHARS + 1)), /exceeds 160 characters/);
+  assert.equal(router.get(' safe ').id, 'safe');
+  assert.equal(router.unregister(' safe '), true);
+  assert.equal(router.get('safe'), null);
+});

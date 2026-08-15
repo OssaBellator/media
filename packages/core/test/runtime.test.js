@@ -196,3 +196,17 @@ test("planner invocation options reject accessors unknown fields and coercive by
   await assert.rejects(() => planWithProvider(provider, createMediaProject(), "inspect", {}, { hidden: true }), /Unsupported planner invocation config field: hidden/);
   assert.equal(calls, 0);
 });
+
+
+test("planner registry lookup and removal require bounded string identities without coercion", () => {
+  const registry = new PlannerRegistry().register({ id: "safe", plan: async () => ({ summary: "noop", operations: [] }) });
+  let coercions = 0;
+  const forged = { toString() { coercions += 1; return "safe"; } };
+  assert.throws(() => registry.get(forged), /Planner provider id must be a non-empty string/);
+  assert.throws(() => registry.unregister(forged), /Planner provider id must be a non-empty string/);
+  assert.equal(coercions, 0);
+  assert.throws(() => registry.get("x".repeat(MAX_PLANNER_PROVIDER_ID_CHARS + 1)), /exceeds 160 characters/);
+  assert.equal(registry.get(" safe ").id, "safe");
+  assert.equal(registry.unregister(" safe "), true);
+  assert.equal(registry.get("safe"), null);
+});

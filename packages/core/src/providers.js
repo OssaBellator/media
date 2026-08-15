@@ -321,8 +321,8 @@ export class PlannerRegistry {
     this.#providers.set(valid.id, valid);
     return this;
   }
-  unregister(id) { return this.#providers.delete(id); }
-  get(id) { return this.#providers.get(id) ?? null; }
+  unregister(id) { return this.#providers.delete(boundedProviderString(id, 'Planner provider id', MAX_PLANNER_PROVIDER_ID_CHARS)); }
+  get(id) { return this.#providers.get(boundedProviderString(id, 'Planner provider id', MAX_PLANNER_PROVIDER_ID_CHARS)) ?? null; }
   list() { return [...this.#providers.values()]; }
 }
 
