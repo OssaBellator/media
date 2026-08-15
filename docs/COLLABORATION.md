@@ -70,6 +70,14 @@ The client deliberately has **no automatic retry**. Once a coordinator may have 
 
 `collaborationResultAction()` converts server result statuses into UI intent without changing history: `applied` → `accepted`, `rebase-safe` → `resign`, `conflict` → `resolve`, and `different-base`/`different-history` → `refresh`. It does not rebase, alter operations or create a new signature.
 
+## Conflict-resolution view model
+
+`packages/core/src/collaboration-resolution.js` turns a sanitized `conflict` wire result into a UI-safe model by joining the server's sequence/transaction/operation coordinates back to the client's original signed batch and a refreshed local operation log. Every coordinate is revalidated before presentation; stale, forged or out-of-range coordinates fail closed.
+
+The model exposes transaction labels, operation types/targets, affected field/property names and resource labels, but does not copy `node.update` patch values or the batch signature into presentation state. Duplicate conflict coordinates collapse deterministically, while `conflictsTruncated > 0` marks the model incomplete so a UI cannot mistake a partial server response for a fully resolvable conflict set.
+
+The model deliberately sets `allowsAutomaticMerge: false`. It is presentation state only: it does not filter operations, choose winners, mutate the log, rebuild a batch or sign anything. A resolution UI must collect an explicit user decision, refresh against the current head and create a new transaction/batch through the normal signed path.
+
 ## Deliberate boundary
 
 This is not yet a complete collaboration protocol. Media does **not** yet define network transport, account/session authentication, authenticated administrative enrollment UI, presence, permissions or server persistence. Key distribution/rotation and account authorization remain deployment responsibilities.

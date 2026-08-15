@@ -33,6 +33,7 @@ export * from './collaboration-coordinator.js';
 export * from './collaboration-wire.js';
 export * from './collaboration-http.js';
 export * from './collaboration-client.js';
+export * from './collaboration-resolution.js';
 export * from './trust-registry.js';
 export * from './trusted-transition.js';
 export * from './planner.js';
