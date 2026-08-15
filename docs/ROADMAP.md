@@ -18,7 +18,8 @@
 - media import/relink Blob writes committed atomically with their graph+journal checkpoint through one IndexedDB transaction;
 - automatic compare-and-swap journal compaction in `HistoryJournalSession` at a 250-entry threshold while preserving the in-memory undo stack;
 - undo-aware quota-pressure source-Blob cleanup in `HistoryJournalSession`, targeting 90% → 80% usage while retaining persisted and present/past/future asset identities plus fingerprint aliases;
-- observer-free advanced runtime controls with a persistent event-delegated panel and an explicit graph-provider handoff seam.
+- observer-free advanced runtime controls with a persistent event-delegated panel and an explicit graph-provider handoff seam;
+- cache-first shared Studio graph state for advanced actions, eliminating repeated IndexedDB graph reloads after bootstrap while preserving the graph-provider override seam.
 
 ## Next hardening
 
@@ -28,4 +29,4 @@
 4. signed/integrity-pinned codec plugin packaging and real native/WASM codec distributions;
 5. larger encrypted/adaptive real-media corpus plus HLS/DASH live lab fixtures;
 6. integrate MP4 chunk planning directly into final writer interleave policy and stress multi-day outputs;
-7. hand the current in-memory Studio graph directly to `advanced-runtime.js`, remove its storage fallback, and replace the legacy visible `0.4` badge with the 0.16 app version before authenticated collaboration/distributed render work.
+7. replace the legacy visible `0.4` badge with the 0.16 app version, then begin authenticated collaboration and distributed render execution.

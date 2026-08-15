@@ -1,10 +1,11 @@
 import { readFile } from 'node:fs/promises';
 
-const [app, index, view, advanced] = await Promise.all([
+const [app, index, view, advanced, storage] = await Promise.all([
   readFile(new URL('../apps/studio/app.js', import.meta.url), 'utf8'),
   readFile(new URL('../apps/studio/index.html', import.meta.url), 'utf8'),
   readFile(new URL('../apps/studio/view.js', import.meta.url), 'utf8'),
   readFile(new URL('../apps/studio/advanced-runtime.js', import.meta.url), 'utf8'),
+  readFile(new URL('../apps/studio/storage.js', import.meta.url), 'utf8'),
 ]);
 
 const checks = [
@@ -19,10 +20,12 @@ const checks = [
   ['delivery compatibility bootstrap removed', !/composition-delivery-bootstrap\.js/.test(index)],
   ['advanced runtime no longer owns a DOM mutation observer', !/MutationObserver/.test(advanced)],
   ['advanced runtime exposes an explicit graph-provider seam', /setAdvancedRuntimeGraphProvider/.test(advanced) && /graphProvider/.test(advanced)],
+  ['advanced runtime routes graph reads through its provider', /let graphProvider = \(\) => loadStoredGraph\(\)/.test(advanced) && /const graph = await graphProvider\(\)/.test(advanced)],
+  ['storage graph reads are cache-first after bootstrap', /loadStoredGraph\(\) \{ return currentGraphCache\?\?/.test(storage)],
+  ['storage publishes and advances the shared graph cache', /getCachedStoredGraph/.test(storage) && /currentGraphCache=graph/.test(storage) && /currentGraphCache=record\.graph/.test(storage)],
 ];
 
 const remaining = [
-  ['advanced runtime still defaults to reloading graph state from storage', /loadStoredGraph/.test(advanced)],
   ['brand badge still hardcodes the legacy 0.4 label', /<span class="alpha">0\.4<\/span>/.test(view)],
 ];
 
