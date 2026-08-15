@@ -34,9 +34,15 @@
 - bounded deterministic `media.collaboration-wire.v1` batch-submit envelopes with UTF-8/JSON size limits, strict fields, transport-safe conflict diagnostics and current-head responses for client re-signing;
 - Web `Request`/`Response` collaboration HTTP adapter with same-origin default, explicit bounded CORS preflight, pre-body authorization hook, streaming body ceiling and generic internal-error responses;
 - runtime-neutral per-connection WebSocket adapter with bounded queued work, serialized coordinator submission/outbound sends, correlated backpressure, bounded wire reuse and explicit no-retry delivery semantics;
+- bounded collaboration WebSocket client with pending-request backpressure, request-ID correlation, serialized outbound sends, no retry after ambiguous delivery and explicit unsolicited/duplicate response rejection;
 - bounded collaboration HTTP client with strict wire-response validation, request correlation, typed errors, explicit no-retry semantics for ambiguous delivery and UI-oriented resolution action mapping;
 - UI-safe collaboration conflict-resolution model that revalidates sanitized server coordinates against refreshed local history/original signed batches, exposes target/property summaries without patch values, de-duplicates rows and refuses automatic merge/re-sign;
 - explicit conflict-resolution decision drafts grouped by remote operation, with head-bound fingerprints, complete-set enforcement and payload-free `keep-local`/`reapply-remote`/`manual` final intents;
+- Studio conflict-resolution renderer, stateful session and delegated DOM controller that expose explicit decisions while owning no graph/signing/transport authority;
+- fresh collaboration resolution-batch builder that accepts only finalized payload-free intent plus newly authored editor transactions, rejects head drift/reused IDs/invalid graph transitions and signs resolution provenance without copying stale remote operation payloads;
+- atomic multi-job render-worker coordinator sharing one trust/replay registry, with claim/completion state and nonce consumption committed together and retryability preserved when no durable transition occurs;
+- bounded `media.render-worker-wire.v1` envelopes plus listener-neutral HTTP adapter with strict fields/byte limits, pre-body authorization, same-origin/CORS policy and sanitized state/artifact errors;
+- single-attempt render-worker HTTP client with strict correlated response validation and explicit unknown-delivery errors instead of automatic replay of signed worker messages;
 - serialized Studio `ProjectJournalSession` plus `HistoryJournalSession`, wired into `app.js` for persistence-first edit/Agent/undo/redo/import/project-open recovery;
 - media import/relink Blob writes committed atomically with their graph+journal checkpoint through one IndexedDB transaction;
 - automatic compare-and-swap journal compaction in `HistoryJournalSession` at a 250-entry threshold while preserving the in-memory undo stack;
@@ -50,4 +56,4 @@
 2. platform color management, display calibration and actual HDR swap-chain/output surfaces;
 3. ship real signed native/WASM codec distributions and deployment key-management policy on top of the verified package format;
 4. larger encrypted/adaptive real-media corpus plus HLS/DASH live lab fixtures;
-5. add a host-specific authenticated WebSocket upgrade/server binding plus a visual decision UI over the resolution model/intent and administrative enrollment/account authorization; add remote render coordinator/artifact-storage transport on the existing atomic trust/application transition boundary.
+5. bind collaboration resolution/session controls into the host Studio application and add host-specific WebSocket upgrade/session authorization plus administrative account/key lifecycle operations; deploy the render-worker coordinator with a durable atomic datastore, artifact upload/storage verification, scheduler/worker discovery and host HTTP/WebSocket listener/TLS integration.
