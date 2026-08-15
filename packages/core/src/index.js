@@ -47,6 +47,7 @@ export * from './creative-object.js';
 export * from './generated-media.js';
 export * from './generation-runner.js';
 export * from './semantic-search.js';
+export * from './semantic-enrichment.js';
 export * from './model-router.js';
 export * from './planner.js';
 export * from './project.js';

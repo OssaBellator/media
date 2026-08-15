@@ -1,5 +1,5 @@
 export const MODEL_OPERATIONS = Object.freeze([
-  'plan', 'embed', 'generate-image', 'edit-image', 'generate-video', 'edit-video',
+  'plan', 'embed', 'analyze-media', 'generate-image', 'edit-image', 'generate-video', 'edit-video',
   'generate-audio', 'edit-audio', 'transcribe', 'synthesize-speech',
 ]);
 export const MODEL_DATA_POLICIES = Object.freeze(['any', 'trusted', 'local']);
