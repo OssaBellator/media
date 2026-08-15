@@ -24,6 +24,7 @@
 - Studio brand/version badge sourced from the application version instead of a legacy hardcoded `0.4`;
 - Cut and composition-delivery runtime sessions with direct in-memory graph ownership in Studio;
 - deterministic checksummed operation-log primitives plus atomic IndexedDB graph/journal checkpoints and recovery validation;
+- authenticated collaboration operation batches binding actor/key identity, canonical transaction bytes and the exact prior log head, with allowlist/freshness policy and fail-closed pre-replay verification;
 - serialized Studio `ProjectJournalSession` plus `HistoryJournalSession`, wired into `app.js` for persistence-first edit/Agent/undo/redo/import/project-open recovery;
 - media import/relink Blob writes committed atomically with their graph+journal checkpoint through one IndexedDB transaction;
 - automatic compare-and-swap journal compaction in `HistoryJournalSession` at a 250-entry threshold while preserving the in-memory undo stack;
@@ -37,4 +38,4 @@
 2. platform color management, display calibration and actual HDR swap-chain/output surfaces;
 3. ship real signed native/WASM codec distributions and deployment key-management policy on top of the verified package format;
 4. larger encrypted/adaptive real-media corpus plus HLS/DASH live lab fixtures;
-5. begin authenticated collaboration and distributed render execution.
+5. add causal/conflict semantics and authenticated collaboration transport, then bind distributed render worker claims and artifacts to the same actor/key trust model.
