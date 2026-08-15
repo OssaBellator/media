@@ -1,0 +1,5 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {decodePayloadChunks,payloadChunkInit} from '../webcodecs-payload.js';
+class Chunk{constructor(init){Object.assign(this,init);}}
+class Decoder{static async isConfigSupported(config){return{supported:true,config};}constructor({output}){this.output=output;this.decodeQueueSize=0;}configure(config){this.config=config;}decode(chunk){this.output({timestamp:chunk.timestamp,data:chunk.data});}async flush(){}close(){this.closed=true;}}
+test('payload chunk init does not require source offsets',()=>{const init=payloadChunkInit({type:'key',timestamp:12,payload:Uint8Array.of(1,2)});assert.deepEqual([...init.data],[1,2]);assert.equal(init.timestamp,12);});
+test('payload decoder submits elementary chunks directly',async()=>{const output=[];const result=await decodePayloadChunks({type:'video',codec:'avc1.64001F',width:1920,height:1080},[{type:'key',timestamp:1,payload:Uint8Array.of(9)}],{onOutput:f=>output.push(f),VideoDecoderCtor:Decoder,VideoChunk:Chunk});assert.equal(result.submitted,1);assert.equal(output.length,1);assert.deepEqual([...output[0].data],[9]);});

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.13.0
+
+- Added a modular 188-byte MPEG-TS demux/session path with PAT/PMT discovery, PES reconstruction, continuity/PCR diagnostics and 33-bit timestamp rollover handling.
+- Added H.264/H.265 Annex-B keyframe inspection, H.264 SPS dimensions/codec metadata and AAC/ADTS access-unit extraction.
+- Added adaptive byte-signature routing between existing CMAF sessions and bounded MPEG-TS sessions for legacy HLS packaging.
+- Added a v2 DASH period/timing layer with inferred period windows, period-unique representation IDs, UTCTiming, ServiceDescription, EventStream and availability metadata.
+- Added a period-aware DASH browser session with clock synchronization and representation-family preference across period transitions.
+- Added SHA-256 integrity verification, host-version bounds and redirect-origin checks for codec plugins plus an integrity-required production runtime entry point.
+- Added WebCodecs per-chunk payload decoding for non-contiguous elementary-stream payloads.
+- Added frame-budget fidelity scheduling plus an additive playback adapter that resolves FPS from evaluated composition identity.
+- Added focused 0.13 regressions across transport streams, adaptive routing, DASH clocks/periods, codec integrity, payload decode and fidelity control.
+
 ## 0.12.0
 
 - Added normalized HLS master/media parsing including LL-HLS parts/server-control/preload hints, delta `EXT-X-SKIP`, rendition reports, byte ranges, maps, discontinuities and key metadata.

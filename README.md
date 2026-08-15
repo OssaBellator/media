@@ -4,53 +4,63 @@ Media is an experimental unified creative workstation for image, video, audio, a
 
 The architectural thesis remains: **the creative project is the product, not a collection of application-specific files**. Canvas, Cut, Motion, Deliver and Agent are views over one Universal Creative Graph, reversible history and a shared media-kernel contract.
 
-## Current milestone — 0.12
+## Current milestone — 0.13
 
-0.12 turns the live/container/backend foundations from 0.11 into a more complete **adaptive and deployment-oriented media boundary**.
+0.13 extends the 0.12 adaptive/runtime boundary into **legacy HLS transport, period-correct DASH timing, integrity-pinned codec plugins and adaptive render fidelity** while keeping the large 0.12 parser/playback/kernel modules intact.
 
-### Adaptive HLS / DASH acquisition
+### Legacy HLS / MPEG-TS
 
-Media now normalizes HLS and DASH into one segment model above the existing range/container kernel:
+A new v2 container contract and MPEG-TS kernel cover common 188-byte transport streams:
 
-- HLS master/media playlists, renditions, byte ranges, init maps, discontinuities, program date-time and key metadata;
-- LL-HLS parts, server-control, preload hints, rendition reports and delta-playlist `EXT-X-SKIP` sequencing;
-- DASH `SegmentTemplate` + `SegmentTimeline`, duration-based dynamic windows, `SegmentList`, `SegmentBase` and byte ranges;
-- DASH `sidx` parsing, including bounded hierarchical reference expansion;
-- ABR selection using conservative throughput estimates plus viewport/resolution caps;
-- live-edge/hold-back positioning, retry/backoff and duplicate-delivery suppression;
-- an adaptive → `CmafSegmentSession` bridge so fMP4/CMAF segments enter the same sparse indexing/acknowledgement path used elsewhere in Media.
+- transport sync, adaptation fields, PCR and continuity diagnostics;
+- PAT/PMT program and elementary-stream discovery;
+- PES reconstruction across TS packets;
+- 33-bit PTS/DTS unwrapping across segments plus explicit discontinuity reset;
+- H.264/H.265 Annex-B keyframe inspection;
+- H.264 SPS dimensions and concrete RFC6381-style AVC codec strings;
+- AAC/ADTS access-unit extraction with AudioSpecificConfig;
+- bounded `MpegTsSegmentSession` acknowledgement/eviction.
 
-MPEG-TS is rejected explicitly because the kernel still has no TS demuxer. HLS AES-128 segment encryption requires an injected `decryptSegment`; SAMPLE-AES/CENC metadata remains downstream protected-media work.
+`AdaptiveMediaSession` routes fetched bytes by signature into either the existing CMAF session or the MPEG-TS session. HLS whole-segment AES-128 still clears before container parsing. TS transport scrambling is a separate protected-media condition and fails explicitly.
 
-### Codec plugins
+### DASH timing / periods
 
-The browser codec router can now register validated `media.codec.v1` plugin backends in addition to injected native objects, WebCodecs and WASM objects. Plugin module loading is explicit and origin-restricted by default; an application has to opt into a trusted external module.
+`dash-v2.js` adds period-correct `SegmentTemplate` expansion without replacing the broader 0.12 DASH parser. It provides:
 
-### Display/HDR output policy
+- inferred period windows from neighboring period starts/MPD duration;
+- period-unique representation IDs even when representation IDs repeat;
+- `UTCTiming` direct / HTTP HEAD / HTTP xsdate/ISO synchronization;
+- ServiceDescription latency/playback-rate metadata;
+- EventStream timing;
+- `availabilityTimeOffset` / `availabilityTimeComplete` metadata;
+- active-period/variant/segment selection across sequence-number restarts.
 
-A normalized display-capability model now chooses SDR vs HDR output policy, working format, output transfer/gamut and tone-map requirements. Browser CSS media queries can produce a conservative display profile, while platform/native targets can provide authoritative capabilities.
+`DashStreamSessionV2` synchronizes its clock before dynamic expansion and keeps representation-family preference across period transitions.
 
-The policy is wired into a GPU renderer factory so HDR/SDR decisions configure the compositor's working format and tone-map state instead of living as detached metadata.
+### Codec plugin deployment
 
-### Temporal and vector reference kernels
+Production codec plugins can be integrity-pinned with SHA-256 SRI or hex digests. The secure loader hashes the **fetched bytes that are actually imported**, rechecks redirect origins, validates optional host-version bounds and requires integrity by default in `createSecureProductionKernelRuntime()`.
 
-- shutter-angle temporal sample generation with box/triangle/cosine weights;
-- rolling-shutter time offsets;
-- temporal GPU render-graph expansion plus deterministic CPU weighted-frame accumulation;
-- vector/path matte point-in-fill, signed-distance and feathered alpha rasterization.
+Integrity-pinned browser plugins are expected to be single-file ESM bundles. Media does not yet verify arbitrary relative-import module graphs as one signed package.
 
-These are correctness/reference kernels. Real-time multi-sample playback and a dedicated GPU path/vector-SDF rasterizer remain optimization work.
+### Adaptive fidelity
 
-### Long-output / long-run hardening
+`FidelityController` turns temporal/vector reference work into a frame-budget policy:
 
-- configurable MP4 chunk planning and table-size projection;
-- multi-hour export scale validation without constructing millions of sample records;
-- `npm run stress` for large adaptive-manifest parsing, MP4 table projection and vector-matte raster workloads;
-- environment-keyed conformance history and long-run regression budgets via `npm run conformance:history`.
+- scrubbing collapses to one temporal sample and one matte sample;
+- playback adapts temporal samples and matte supersampling from measured render cost/staleness;
+- export preserves requested reference quality;
+- FPS resolution follows the evaluated composition ID, so it does not depend on a graph `kind` marker.
 
-## Deliberate 0.12 boundaries
+`FidelityPlaybackEngine` is an additive scheduling adapter: it evaluates a composition, attaches the fidelity plan to a render callback and feeds measured outcomes back into the controller. Existing 0.12 composition playback remains a compatible fallback.
 
-Media still does not bundle DRM/key acquisition, native/WASM codec binaries, MPEG-TS demux, HLS/DASH manifest networking policy for every extension, OS display calibration, or a large copyrighted camera corpus. DASH support targets common `SegmentTemplate`, `SegmentList` and `SegmentBase/sidx` delivery rather than the full standard surface. Browser HDR capability detection is advisory; calibrated HDR output still belongs in platform backends. Temporal motion blur and vector matte kernels are reference paths, not yet the normal real-time Cut renderer.
+### Non-contiguous decoder payloads
+
+`decodePayloadChunks()` lets WebCodecs consume per-chunk elementary payloads directly. MPEG-TS therefore does not need fake source offsets or a reconstructed file-sized elementary stream before decode.
+
+## Deliberate 0.13 boundaries
+
+The TS reference path targets 188-byte MPEG-TS, not 192-byte M2TS. H.264 metadata is deeper than HEVC metadata. AAC/ADTS is reframed; LATM, MP3, AC-3 and E-AC-3 are currently identified at the program level rather than all being normalized into decoder-ready access units. DASH v2 concentrates on period/timing `SegmentTemplate` behavior while the 0.12 parser remains the broader `SegmentList`/`SegmentBase`/`sidx` path. Media still does not ship DRM/key acquisition, native/WASM codec binaries, calibrated OS HDR output or a large copyrighted device corpus.
 
 ## Run locally
 
@@ -64,18 +74,8 @@ npm run conformance
 npm run stress
 ```
 
-Optional conformance controls:
-
-```sh
-MEDIA_CORPUS_DIR=/path/to/media-corpus npm run conformance
-MEDIA_CONFORMANCE_REPORT=artifacts/report.json npm run conformance
-MEDIA_CONFORMANCE_BASELINE=baseline.json MEDIA_MAX_REGRESSION=.10 npm run conformance
-MEDIA_REQUIRE_CORPUS=1 MEDIA_CORPUS_DIR=/path/to/full-corpus npm run conformance
-MEDIA_CONFORMANCE_REPORT=artifacts/report.json npm run conformance:history
-```
-
 ## Engineering principle
 
-The UI is not the source of truth. Gestures, agents, Workers, adaptive manifests, range sources, codec/decryptor/plugin backends, GPU passes, derivative jobs and resumable render checkpoints converge on the same graph/evaluation/kernel contracts.
+The UI is not the source of truth. Gestures, agents, Workers, adaptive manifests, range/segment sources, codec/decryptor/plugin backends, GPU passes, derivative jobs and resumable render checkpoints converge on the same graph/evaluation/kernel contracts.
 
-See `docs/ARCHITECTURE.md`, `docs/ENGINE.md`, `docs/KERNEL.md`, `docs/SOURCE_IO.md`, `docs/LIVE_MEDIA.md`, `docs/ADAPTIVE_STREAMING.md`, `docs/PLAYBACK.md`, `docs/EXPORT.md`, `docs/GPU.md`, `docs/MOTION_RENDERING.md`, `docs/AUDIO.md`, `docs/CODECS.md`, `docs/CONFORMANCE.md`, `docs/STRESS.md`, `docs/PROJECT_FORMAT.md`, `docs/DECISIONS.md` and `docs/ROADMAP.md`.
+See `docs/ARCHITECTURE.md`, `docs/ENGINE.md`, `docs/KERNEL.md`, `docs/SOURCE_IO.md`, `docs/LIVE_MEDIA.md`, `docs/ADAPTIVE_STREAMING.md`, `docs/MPEG_TS.md`, `docs/PLAYBACK.md`, `docs/EXPORT.md`, `docs/GPU.md`, `docs/MOTION_RENDERING.md`, `docs/AUDIO.md`, `docs/CODECS.md`, `docs/CONFORMANCE.md`, `docs/STRESS.md`, `docs/PROJECT_FORMAT.md`, `docs/DECISIONS.md` and `docs/ROADMAP.md`.
