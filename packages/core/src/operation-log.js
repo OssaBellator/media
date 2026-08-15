@@ -1,0 +1,30 @@
+export const OPERATION_LOG_SCHEMA='media.operation-log.v1';
+
+function assertJsonValue(value,path='value',seen=new Set()){
+  if(value===null||typeof value==='string'||typeof value==='boolean')return;
+  if(typeof value==='number'){if(!Number.isFinite(value))throw new Error(`${path} must contain only finite numbers`);return;}
+  if(Array.isArray(value)){if(seen.has(value))throw new Error(`${path} must not contain cycles`);seen.add(value);value.forEach((item,index)=>assertJsonValue(item,`${path}[${index}]`,seen));seen.delete(value);return;}
+  if(typeof value==='object'){
+    if(seen.has(value))throw new Error(`${path} must not contain cycles`);
+    const proto=Object.getPrototypeOf(value);if(proto!==Object.prototype&&proto!==null)throw new Error(`${path} must contain only plain objects`);
+    seen.add(value);for(const [key,item] of Object.entries(value)){if(item===undefined)throw new Error(`${path}.${key} must not be undefined`);assertJsonValue(item,`${path}.${key}`,seen);}seen.delete(value);return;
+  }
+  throw new Error(`${path} contains unsupported ${typeof value}`);
+}
+function canonical(value){
+  if(value===null)return'null';
+  if(typeof value==='string'||typeof value==='boolean'||typeof value==='number')return JSON.stringify(value);
+  if(Array.isArray(value))return`[${value.map(canonical).join(',')}]`;
+  return`{${Object.keys(value).sort().map((key)=>`${JSON.stringify(key)}:${canonical(value[key])}`).join(',')}}`;
+}
+export function canonicalOperationLogJson(value){assertJsonValue(value);return canonical(value);}
+export function operationLogChecksum(value){const text=canonicalOperationLogJson(value);let hash=0xcbf29ce484222325n;for(let i=0;i<text.length;i++){const code=text.charCodeAt(i);hash^=BigInt(code&255);hash=BigInt.asUintN(64,hash*0x100000001b3n);hash^=BigInt(code>>>8);hash=BigInt.asUintN(64,hash*0x100000001b3n);}return hash.toString(16).padStart(16,'0');}
+function cloneJson(value){return JSON.parse(canonicalOperationLogJson(value));}
+function assertTransaction(transaction){if(!transaction||typeof transaction!=='object'||Array.isArray(transaction))throw new Error('Operation-log transaction must be an object');if(typeof transaction.id!=='string'||!transaction.id)throw new Error('Operation-log transaction id is required');if(typeof transaction.label!=='string'||!transaction.label)throw new Error('Operation-log transaction label is required');if(!Array.isArray(transaction.operations))throw new Error('Operation-log transaction operations must be an array');assertJsonValue(transaction,'transaction');return transaction;}
+function entryPayload({sequence,transaction,previousChecksum}){return{schema:OPERATION_LOG_SCHEMA,sequence,transaction,previousChecksum};}
+export function createOperationLog({projectId,baseRevision=0,metadata={}}={}){if(typeof projectId!=='string'||!projectId)throw new Error('Operation log projectId is required');if(!Number.isSafeInteger(baseRevision)||baseRevision<0)throw new Error('Operation log baseRevision must be a non-negative safe integer');assertJsonValue(metadata,'metadata');return{schema:OPERATION_LOG_SCHEMA,projectId,baseRevision,metadata:cloneJson(metadata),entries:[]};}
+export function validateOperationLog(log){if(!log||typeof log!=='object'||Array.isArray(log))throw new Error('Operation log must be an object');if(log.schema!==OPERATION_LOG_SCHEMA)throw new Error(`Unsupported operation-log schema: ${log.schema}`);if(typeof log.projectId!=='string'||!log.projectId)throw new Error('Operation log projectId is required');if(!Number.isSafeInteger(log.baseRevision)||log.baseRevision<0)throw new Error('Operation log baseRevision is invalid');if(!Array.isArray(log.entries))throw new Error('Operation log entries must be an array');assertJsonValue(log.metadata??{},'metadata');let previousChecksum=null;for(let index=0;index<log.entries.length;index++){const entry=log.entries[index],sequence=index+1;if(!entry||typeof entry!=='object'||Array.isArray(entry))throw new Error(`Operation log entry ${sequence} must be an object`);if(entry.schema!==OPERATION_LOG_SCHEMA)throw new Error(`Operation log entry ${sequence} schema mismatch`);if(entry.sequence!==sequence)throw new Error(`Operation log sequence gap at ${sequence}`);assertTransaction(entry.transaction);if((entry.previousChecksum??null)!==previousChecksum)throw new Error(`Operation log checksum chain mismatch at ${sequence}`);const expected=operationLogChecksum(entryPayload({sequence,transaction:entry.transaction,previousChecksum}));if(entry.checksum!==expected)throw new Error(`Operation log checksum mismatch at ${sequence}`);previousChecksum=entry.checksum;}return log;}
+export function appendOperationLog(log,transaction){validateOperationLog(log);assertTransaction(transaction);const sequence=log.entries.length+1,previousChecksum=log.entries.at(-1)?.checksum??null,cleanTransaction=cloneJson(transaction),payload=entryPayload({sequence,transaction:cleanTransaction,previousChecksum}),entry={...payload,checksum:operationLogChecksum(payload)};return{...log,metadata:cloneJson(log.metadata??{}),entries:[...log.entries.map(cloneJson),entry]};}
+export function operationLogHead(log){validateOperationLog(log);const entry=log.entries.at(-1)??null;return{sequence:entry?.sequence??0,checksum:entry?.checksum??null,transactionId:entry?.transaction?.id??null};}
+export function truncateOperationLog(log,sequence){validateOperationLog(log);if(!Number.isSafeInteger(sequence)||sequence<0||sequence>log.entries.length)throw new Error('Operation-log truncate sequence is out of range');const next={...log,metadata:cloneJson(log.metadata??{}),entries:log.entries.slice(0,sequence).map(cloneJson)};validateOperationLog(next);return next;}
+export function replayOperationLog(baseState,log,applyTransaction){validateOperationLog(log);if(typeof applyTransaction!=='function')throw new Error('Operation-log replay requires applyTransaction');let state=baseState;for(const entry of log.entries)state=applyTransaction(state,cloneJson(entry.transaction),entry);return state;}

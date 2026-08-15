@@ -26,6 +26,7 @@ export * from './keyframes.js';
 export * from './loudness.js';
 export * from './offline-audio.js';
 export * from './operations.js';
+export * from './operation-log.js';
 export * from './planner.js';
 export * from './project.js';
 export * from './providers.js';
