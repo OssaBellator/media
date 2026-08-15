@@ -41,6 +41,8 @@
 - Studio conflict-resolution renderer, stateful session and delegated DOM controller that expose explicit decisions while owning no graph/signing/transport authority;
 - fresh collaboration resolution-batch builder that accepts only finalized payload-free intent plus newly authored editor transactions, rejects head drift/reused IDs/invalid graph transitions and signs resolution provenance without copying stale remote operation payloads;
 - atomic multi-job render-worker coordinator sharing one trust/replay registry, with claim/completion state and nonce consumption committed together and retryability preserved when no durable transition occurs;
+- revisioned `media.render-worker-coordinator-store.v1` CAS snapshots and coordinator-store session with explicit trust bootstrap, multi-process stale-write rejection, reload-required conflict handling and unknown-commit protection for ambiguous datastore failures;
+- exact stored render-artifact SHA-256 verification over bounded bytes/Blob/stream adapters, distinguishing storage service failure from missing, oversized or digest-mismatched artifacts;
 - bounded `media.render-worker-wire.v1` envelopes plus listener-neutral HTTP adapter with strict fields/byte limits, pre-body authorization, same-origin/CORS policy and sanitized state/artifact errors;
 - single-attempt render-worker HTTP client with strict correlated response validation and explicit unknown-delivery errors instead of automatic replay of signed worker messages;
 - serialized Studio `ProjectJournalSession` plus `HistoryJournalSession`, wired into `app.js` for persistence-first edit/Agent/undo/redo/import/project-open recovery;
@@ -56,4 +58,4 @@
 2. platform color management, display calibration and actual HDR swap-chain/output surfaces;
 3. ship real signed native/WASM codec distributions and deployment key-management policy on top of the verified package format;
 4. larger encrypted/adaptive real-media corpus plus HLS/DASH live lab fixtures;
-5. bind collaboration resolution/session controls into the host Studio application and add host-specific WebSocket upgrade/session authorization plus administrative account/key lifecycle operations; deploy the render-worker coordinator with a durable atomic datastore, artifact upload/storage verification, scheduler/worker discovery and host HTTP/WebSocket listener/TLS integration.
+5. bind collaboration resolution/session controls into the host Studio application and add host-specific WebSocket upgrade/session authorization plus administrative account/key lifecycle operations; deploy the render-worker contracts with a concrete transactional CAS datastore adapter, artifact upload/object-store `readArtifact` adapter, scheduler/worker discovery and host HTTP/WebSocket listener/TLS integration.
