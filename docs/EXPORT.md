@@ -28,7 +28,11 @@ Each render chunk owns global output timestamps and can persist picture+audio as
 
 ## Streaming classic MP4 finalization
 
-Streaming finalization reads persisted fragmented checkpoints through a lazy range source, precomputes a fast-start `moov` and writes sample payloads to the output sink without rebuilding the final file in memory. Consecutive same-track output runs share chunk-table entries.
+Streaming finalization reads persisted fragmented checkpoints through a lazy range source, precomputes a fast-start `moov` and writes sample payloads to the output sink without rebuilding the final file in memory.
+
+The final writer now uses the shared MP4 chunk planner as its payload-layout policy: samples are grouped into bounded same-track chunks by byte count, media duration and sample count, then those chunks are interleaved by decode time. `stsc` and `co64` are derived from that exact planned payload order, so long A/V outputs no longer degenerate into packet-per-chunk tables when audio and video timestamps alternate.
+
+The default streaming policy targets one-second chunks, up to 8 MiB and 4096 samples per chunk; callers can override those bounds through `planStreamingMp4()` / `writeStreamingMp4()` options. Single-track runs and exact payload offsets remain deterministic.
 
 The writer preserves AVC/HEVC/AV1 decoder descriptions, AAC AudioSpecificConfig, signed composition offsets, non-zero track starts, rotation, pixel aspect, nclx color state and CLLI/MDCV HDR metadata.
 
