@@ -32,3 +32,11 @@ This gives collaboration a deterministic authenticated ingestion boundary withou
 This is not yet a complete collaboration protocol. Media does **not** yet define network transport, account/session authentication, key enrollment/revocation, causal merge semantics, concurrent-edit conflict resolution, presence, permissions or server persistence. Stale/forked batches fail closed until those policies are explicit.
 
 Distributed render workers reuse the same actor/key trust vocabulary in `media.render-worker.v1`. Signed claim and completion messages bind a specific chunk attempt to that identity, and completion requires an injected verifier for the signed SHA-256 artifact descriptor before render state can transition. Coordinator transport, durable nonce state and deployment key lifecycle remain external hardening work.
+
+## Causal conflict classification
+
+`packages/core/src/operation-conflicts.js` classifies stale signed batches without silently changing their authenticated content. It maps the current operation vocabulary to deterministic write resources: whole-node add/remove, shallow node fields and individual `props` keys, edge identities and endpoint link sets. Unknown/custom operations are global conflicts.
+
+`analyzeOperationBatchRebase()` first proves the batch's signed prior head is an actual prefix of the local log. Local entries after that head are then compared with the remote transactions. The result is `current`, `rebase-safe`, `conflict`, `different-base` or `different-history` and conflict results carry local/remote sequence, transaction and operation indexes for a future resolution UI.
+
+A `rebase-safe` result is only a proposal: the returned transactions must be rebuilt against the new head and signed again by the actor. Media never rewrites a signed batch or treats its old signature as valid for a rebased history.
