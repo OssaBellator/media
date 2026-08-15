@@ -155,6 +155,20 @@ export function reviseAgentPlan(graph, plan, operations, { summary = plan?.summa
   });
 }
 
+export function selectAgentPlanOperations(graph, plan, operationIndexes, options = {}) {
+  assertAgentPlanMatchesGraph(graph, plan);
+  if (!Array.isArray(operationIndexes)) throw new Error("Agent plan operation selection must be an array");
+  const seen = new Set();
+  const indexes = operationIndexes.map((value) => {
+    const index = Number(value);
+    if (!Number.isSafeInteger(index) || index < 0 || index >= plan.operations.length) throw new Error(`Agent plan operation index is out of range: ${value}`);
+    if (seen.has(index)) throw new Error(`Agent plan operation index is duplicated: ${index}`);
+    seen.add(index);
+    return index;
+  }).sort((a, b) => a - b);
+  return reviseAgentPlan(graph, plan, indexes.map((index) => plan.operations[index]), options);
+}
+
 export function createAgentPlanTransaction(graph, plan, { label = plan?.summary || "Agent edit", metadata = {} } = {}) {
   previewAgentPlan(graph, plan);
   const cleanMetadata = cloneJson(metadata, "Agent transaction metadata");
