@@ -62,6 +62,14 @@ The adapter accepts only the configured collaboration path and `POST application
 
 Origin checks are transport hygiene, not actor authentication. Deployments still need a real administrative/account authorization system behind `authorizeRequest()` and should expose the handler only through TLS and their normal service perimeter.
 
+## WebSocket session adapter
+
+`packages/core/src/collaboration-websocket.js` is a runtime-neutral per-connection adapter around the same bounded wire submitter. It does not open or upgrade sockets. The host supplies a `send(bytes)` callback and the coordinator-style `submit(batch)` ingress function after authenticating the WebSocket upgrade/session through its normal service boundary.
+
+Accepted messages are serialized per connection, and outbound `send()` calls are serialized independently. `maxPending` bounds running plus queued accepted work; overload returns a request-correlated `backpressure` wire error when the request ID can be parsed. Malformed messages reuse the normal bounded wire errors, unknown service failures become generic `internal-error` responses, and a failed response send is surfaced once with no retry.
+
+The no-retry rule is the same as HTTP: a response delivery failure may happen after an authenticated nonce/application transition committed, so the socket adapter never replays the signed message. Clients must reconcile current state before issuing a new signed request.
+
 ## HTTP client and resolution actions
 
 `packages/core/src/collaboration-client.js` is the matching bounded fetch client. It creates the signed wire request, performs exactly one POST attempt, stream-bounds the response, requires `application/json`, parses the strict wire response schema and correlates successful results to the original request ID. Generic server errors may omit a request ID only when the server rejected bytes before it could parse the envelope.
