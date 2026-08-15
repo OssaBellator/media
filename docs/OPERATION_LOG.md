@@ -58,3 +58,15 @@ History navigation and project replacement are not naturally invertible operatio
 `commitGraphFactory()` evaluates direct-graph changes against the latest serialized history and forwards persistence options out-of-band. This is used by media import so concurrent editor activity cannot make an analyzed import overwrite a newer graph. `replace()` is the corresponding boundary for project-open/reset-style replacement.
 
 Recovery verifies the journal through `ProjectJournalSession` and intentionally restarts the ephemeral undo stack from the recovered current graph.
+
+## Rolling base checkpoints
+
+The durable log is bounded rather than append-only forever. `compactStoredOperationJournal()` uses a compare-and-swap guard on the expected sequence and checksum, then atomically clears the journal and promotes the current graph checkpoint to `journalBaseGraph` at sequence zero. A stale tab cannot compact a newer head by accident.
+
+`ProjectJournalSession.compact()` performs the matching in-memory rebase only after durable compaction succeeds. `HistoryJournalSession.compact()` preserves the current undo/redo snapshots while resetting the durable sequence. These APIs are ready for Studio to invoke at a bounded threshold; a compaction failure never needs to roll back an already persisted edit because the existing journal remains valid.
+
+## Storage-pressure source cleanup
+
+Source Blob garbage collection is deliberately conservative. The planner always preserves asset IDs referenced by the persisted graph and also preserves any stored record whose fingerprint matches a current graph asset, because that record may still be needed for automatic relink. Records with unknown age or newer than the retention window are retained as well.
+
+`garbageCollectStoredAssets()` reads the persisted workspace graph and asset records inside one `workspace + assets` read/write transaction, then deletes only stale unreferenced candidates within a caller-supplied byte budget. The primitive is intentionally policy-free beyond its age/budget inputs; Studio can invoke it under quota pressure without putting cleanup into the operation journal.
