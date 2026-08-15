@@ -38,6 +38,18 @@ export class SemanticEmbeddingCache {
     this.save = requireFunction(save, 'Semantic embedding cache save');
     this.remove = requireFunction(remove, 'Semantic embedding cache remove');
     this.list = requireFunction(list, 'Semantic embedding cache list');
+    this.prunedScopes = new Set();
+  }
+
+  async #pruneCurrentOnce(graph, normalizedKinds, sourceFingerprint) {
+    const scopeKey = JSON.stringify([graph.projectId, sourceFingerprint, normalizedKinds]);
+    if (this.prunedScopes.has(scopeKey)) return { cachePrune: null, cachePruneError: null };
+    this.prunedScopes.add(scopeKey);
+    try {
+      return { cachePrune: await this.pruneStale(graph, { kinds: normalizedKinds }), cachePruneError: null };
+    } catch (error) {
+      return { cachePrune: null, cachePruneError: error };
+    }
   }
 
   async getOrCreate(graph, { kinds = null, policy = {}, signal, ...indexOptions } = {}) {
@@ -54,7 +66,8 @@ export class SemanticEmbeddingCache {
       const value = stored.value ?? stored;
       try {
         assertSemanticEmbeddingIndex(value, { projectId: graph.projectId, sourceFingerprint, backendId: backend.id });
-        return { index: value, key, cached: true, cacheReadError: null, cacheWriteError: null };
+        const pruning = await this.#pruneCurrentOnce(graph, normalizedKinds, sourceFingerprint);
+        return { index: value, key, cached: true, cacheReadError: null, cacheWriteError: null, ...pruning };
       } catch {
         try { await this.remove(key); } catch {}
       }
@@ -72,7 +85,8 @@ export class SemanticEmbeddingCache {
         kinds: normalizedKinds,
       });
     } catch (error) { cacheWriteError = error; }
-    return { index, key, cached: false, cacheReadError, cacheWriteError };
+    const pruning = await this.#pruneCurrentOnce(graph, normalizedKinds, index.sourceFingerprint);
+    return { index, key, cached: false, cacheReadError, cacheWriteError, ...pruning };
   }
 
   async invalidate(graph, { kinds = null, policy = {} } = {}) {

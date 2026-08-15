@@ -47,6 +47,24 @@ test('hybrid ranking fuses local lexical and embedding ranks without vectors in 
   assert.equal(JSON.stringify(result).includes('vector'),false);
 });
 
+test('semantic search exposes bounded derived-cache prune health without leaking storage records', async () => {
+  const cache={ getOrCreate:async()=>({
+    index,
+    cached:true,
+    key:'k',
+    cachePrune:{removed:2,retained:1,failed:0,sourceFingerprint:'private-fingerprint',kinds:['object']},
+    cachePruneError:Object.assign(new Error('cleanup warning'),{code:'CACHE_PRUNE_WARNING',records:[{secret:'not-for-state'}]}),
+  }) };
+  const router={ execute(){}, embedQuery:async()=>[{id:'c',kind:'asset',name:'Sunset Ocean',score:.95}] };
+  const session=createSession({getGraph:()=>graph(),router,embeddingCache:cache});
+  const result=await session.search('sunset');
+  assert.deepEqual(result.cache.cachePrune,{removed:2,retained:1,failed:0});
+  assert.equal(result.cache.cachePruneError.code,'CACHE_PRUNE_WARNING');
+  assert.equal(result.cache.cachePruneError.message,'cleanup warning');
+  assert.equal(JSON.stringify(result.cache).includes('private-fingerprint'),false);
+  assert.equal(JSON.stringify(result.cache).includes('not-for-state'),false);
+});
+
 test('embedding/cache failures gracefully fall back to lexical results', async () => {
   const cache={ getOrCreate:async()=>{ throw Object.assign(new Error('model offline'),{code:'MODEL_OFFLINE'}); } };
   const router={ execute(){} };

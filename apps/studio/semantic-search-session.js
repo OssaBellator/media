@@ -28,6 +28,12 @@ function cacheSnapshot(result) {
     key: typeof result.key === 'string' ? result.key : null,
     cacheReadError: cleanError(result.cacheReadError),
     cacheWriteError: cleanError(result.cacheWriteError),
+    cachePrune: result.cachePrune ? {
+      removed: Number(result.cachePrune.removed ?? 0),
+      retained: Number(result.cachePrune.retained ?? 0),
+      failed: Number(result.cachePrune.failed ?? 0),
+    } : null,
+    cachePruneError: cleanError(result.cachePruneError),
   };
 }
 function cloneResult(result) {
@@ -43,7 +49,13 @@ function snapshotState(state) {
     results: state.results.map(cloneResult),
     lexical: state.lexical.map(cloneResult),
     embedded: state.embedded.map(cloneResult),
-    cache: state.cache ? { ...state.cache, cacheReadError: state.cache.cacheReadError ? { ...state.cache.cacheReadError } : null, cacheWriteError: state.cache.cacheWriteError ? { ...state.cache.cacheWriteError } : null } : null,
+    cache: state.cache ? {
+      ...state.cache,
+      cacheReadError: state.cache.cacheReadError ? { ...state.cache.cacheReadError } : null,
+      cacheWriteError: state.cache.cacheWriteError ? { ...state.cache.cacheWriteError } : null,
+      cachePrune: state.cache.cachePrune ? { ...state.cache.cachePrune } : null,
+      cachePruneError: state.cache.cachePruneError ? { ...state.cache.cachePruneError } : null,
+    } : null,
     error: state.error ? { ...state.error } : null,
   };
 }
