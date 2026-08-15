@@ -35,6 +35,7 @@
 - Web `Request`/`Response` collaboration HTTP adapter with same-origin default, explicit bounded CORS preflight, pre-body authorization hook, streaming body ceiling and generic internal-error responses;
 - bounded collaboration HTTP client with strict wire-response validation, request correlation, typed errors, explicit no-retry semantics for ambiguous delivery and UI-oriented resolution action mapping;
 - UI-safe collaboration conflict-resolution model that revalidates sanitized server coordinates against refreshed local history/original signed batches, exposes target/property summaries without patch values, de-duplicates rows and refuses automatic merge/re-sign;
+- explicit conflict-resolution decision drafts grouped by remote operation, with head-bound fingerprints, complete-set enforcement and payload-free `keep-local`/`reapply-remote`/`manual` final intents;
 - serialized Studio `ProjectJournalSession` plus `HistoryJournalSession`, wired into `app.js` for persistence-first edit/Agent/undo/redo/import/project-open recovery;
 - media import/relink Blob writes committed atomically with their graph+journal checkpoint through one IndexedDB transaction;
 - automatic compare-and-swap journal compaction in `HistoryJournalSession` at a 250-entry threshold while preserving the in-memory undo stack;
@@ -48,4 +49,4 @@
 2. platform color management, display calibration and actual HDR swap-chain/output surfaces;
 3. ship real signed native/WASM codec distributions and deployment key-management policy on top of the verified package format;
 4. larger encrypted/adaptive real-media corpus plus HLS/DASH live lab fixtures;
-5. add WebSocket transport around the bounded collaboration wire protocol plus a visual decision UI over the conflict-resolution model and administrative enrollment/account authorization; add remote render coordinator/artifact-storage transport on the existing atomic trust/application transition boundary.
+5. add WebSocket transport around the bounded collaboration wire protocol plus a visual decision UI over the resolution model/intent and administrative enrollment/account authorization; add remote render coordinator/artifact-storage transport on the existing atomic trust/application transition boundary.

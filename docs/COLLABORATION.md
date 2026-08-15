@@ -78,6 +78,14 @@ The model exposes transaction labels, operation types/targets, affected field/pr
 
 The model deliberately sets `allowsAutomaticMerge: false`. It is presentation state only: it does not filter operations, choose winners, mutate the log, rebuild a batch or sign anything. A resolution UI must collect an explicit user decision, refresh against the current head and create a new transaction/batch through the normal signed path.
 
+## Explicit resolution decision intent
+
+`packages/core/src/collaboration-resolution-decisions.js` converts the presentation model into immutable decision state. Conflict rows are grouped by remote `sequence:operationIndex`, so a single remote edit that conflicts with several local edits cannot receive contradictory per-row choices. The only choices are `keep-local`, `reapply-remote` and `manual`.
+
+A draft carries a deterministic fingerprint over the request ID, current head, actor and grouped conflict coordinates. `finalizeCollaborationResolutionIntent()` refuses incomplete/truncated models and refuses any group without an explicit choice. The final `media.collaboration-resolution-intent.v1` value contains only the bound head, fingerprint, remote coordinates and choices; it contains no operation payloads or signature.
+
+The intent is still not an executable merge plan. `reapply-remote` records user intent to recreate that change against refreshed state; it does not copy/apply the old operation or reuse its signature. Transaction reconstruction, invariant validation and signing remain separate steps so multi-operation transaction semantics are never silently filtered by the UI layer.
+
 ## Deliberate boundary
 
 This is not yet a complete collaboration protocol. Media does **not** yet define network transport, account/session authentication, authenticated administrative enrollment UI, presence, permissions or server persistence. Key distribution/rotation and account authorization remain deployment responsibilities.
