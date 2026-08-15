@@ -63,7 +63,7 @@ import { createCutPlaybackRuntime } from "./cut-playback-runtime.js";
 import { createCompositionDeliveryRuntime } from "./composition-delivery-runtime.js";
 import { BrowserAudioMixer } from "./audio-engine.js";
 import { HistoryJournalSession, recoverHistoryJournalSession } from "./history-journal-session.js";
-import { registerStudioGraphProvider, registerStudioNodeSelector } from "./studio-services.js";
+import { registerStudioCommitProvider, registerStudioGraphProvider, registerStudioNodeSelector } from "./studio-services.js";
 import { findStoredAssetByHash, loadAssetBlob, loadStoredGraph, loadStoredOperationRecovery, localAssetUri, saveAssetBlob, saveStoredGraph, saveStoredGraphWithOperation, saveStoredGraphWithOperationAndAssets } from "./storage.js";
 
 const APP_VERSION = "0.16.0";
@@ -96,6 +96,13 @@ registerStudioNodeSelector((nodeId) => {
   selectedId = nodeId;
   render();
   return true;
+});
+registerStudioCommitProvider(async (label, operations, metadata = {}, options = {}) => {
+  if (!historyJournal) throw new Error('Studio journal is not ready');
+  const result = await historyJournal.edit(label, operations, metadata, options);
+  history = result.history;
+  render();
+  return result;
 });
 const selectedNode = () => graph().nodes[selectedId] ?? graph().nodes[graph().projectId];
 const composition = () => nodesByKind(graph(), "composition")[0];

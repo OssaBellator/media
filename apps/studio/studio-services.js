@@ -1,6 +1,7 @@
 let graphProvider = null;
 let nodeSelector = null;
 let modelRouterProvider = null;
+let commitProvider = null;
 
 function requireFunction(value, label) {
   if (typeof value !== 'function') throw new Error(`${label} must be a function`);
@@ -56,4 +57,18 @@ export function getStudioModelRouter() {
   if (router == null) return null;
   if (typeof router.execute !== 'function' || typeof router.list !== 'function') throw new Error('Studio model router provider returned an invalid router');
   return router;
+}
+
+export function registerStudioCommitProvider(provider) {
+  const next = requireFunction(provider, 'Studio commit provider');
+  const previous = commitProvider;
+  commitProvider = next;
+  return restoreRegistration(next, previous, () => commitProvider, (value) => { commitProvider = value; });
+}
+
+export function commitStudioOperations(label, operations, metadata = {}, options = {}) {
+  if (!commitProvider) throw new Error('Studio commit provider is not registered');
+  if (typeof label !== 'string' || !label.trim()) throw new Error('Studio commit requires a non-empty label');
+  if (!Array.isArray(operations)) throw new Error('Studio commit operations must be an array');
+  return commitProvider(label.trim(), operations, metadata, options);
 }
