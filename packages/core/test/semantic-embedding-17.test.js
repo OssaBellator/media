@@ -76,3 +76,47 @@ test('hybrid semantic search combines deterministic lexical and embedding ranks'
   const hybrid = searchSemanticHybrid(graph, index, 'hero Maya', [1, 0, 0], { kinds: ['object'] });
   assert.equal(hybrid[0].id, maya[0].node.id);
 });
+
+test('embedding backend output rejects accessors without executing them', async () => {
+  const graph = createGraph('Film');
+  let rootGetterCalls = 0;
+  const rootOutput = {};
+  Object.defineProperty(rootOutput, 'vectors', { enumerable: true, get() { rootGetterCalls += 1; return [[1]]; } });
+  const rootRouter = new ModelRouter().register({ id: 'root-getter', operations: ['embed'], invoke: async () => rootOutput });
+  await assert.rejects(() => createSemanticEmbeddingIndex(graph, rootRouter, { maxDocuments: 1 }), /Embedding backend output.*enumerable data properties only/);
+  assert.equal(rootGetterCalls, 0);
+
+  let vectorGetterCalls = 0;
+  const vector = [];
+  Object.defineProperty(vector, '0', { enumerable: true, get() { vectorGetterCalls += 1; return 1; } });
+  vector.length = 1;
+  const vectorRouter = new ModelRouter().register({ id: 'vector-getter', operations: ['embed'], invoke: async () => ({ vectors: [vector] }) });
+  await assert.rejects(() => createSemanticEmbeddingIndex(graph, vectorRouter, { maxDocuments: 1 }), /Embedding backend output arrays must be dense data arrays/);
+  assert.equal(vectorGetterCalls, 0);
+});
+
+test('embedding backend vectors require finite numeric scalars and preserve typed-array support', async () => {
+  const graph = createGraph('Film');
+  const stringRouter = new ModelRouter().register({ id: 'strings', operations: ['embed'], invoke: async (_operation, input) => ({ vectors: input.texts.map(() => ['1', 0]) }) });
+  await assert.rejects(() => createSemanticEmbeddingIndex(graph, stringRouter, { maxDocuments: 1 }), /Embedding vector values must be finite numbers/);
+
+  const bigintRouter = new ModelRouter().register({ id: 'bigints', operations: ['embed'], invoke: async (_operation, input) => ({ vectors: input.texts.map(() => new BigInt64Array([1n, 2n])) }) });
+  await assert.rejects(() => createSemanticEmbeddingIndex(graph, bigintRouter, { maxDocuments: 1 }), /Embedding vector values must be finite numbers/);
+
+  const typedRouter = new ModelRouter().register({ id: 'typed', operations: ['embed'], invoke: async (_operation, input) => ({ vectors: input.texts.map(() => new Float32Array([1, 0.5])) }) });
+  const index = await createSemanticEmbeddingIndex(graph, typedRouter, { maxDocuments: 1 });
+  assert.deepEqual(index.documents[0].vector, [1, 0.5]);
+});
+
+test('embedding backend output rejects unknown fields and unsafe metadata before indexing', async () => {
+  const graph = createGraph('Film');
+  const unknown = new ModelRouter().register({ id: 'unknown', operations: ['embed'], invoke: async () => ({ vectors: [[1]], secret: 'hidden' }) });
+  await assert.rejects(() => createSemanticEmbeddingIndex(graph, unknown, { maxDocuments: 1 }), /Unsupported embedding backend output field: secret/);
+
+  let metadataGetterCalls = 0;
+  const metadata = {};
+  Object.defineProperty(metadata, 'secret', { enumerable: true, get() { metadataGetterCalls += 1; return 'hidden'; } });
+  const unsafeMetadata = new ModelRouter().register({ id: 'metadata-getter', operations: ['embed'], invoke: async () => ({ vectors: [[1]], metadata }) });
+  await assert.rejects(() => createSemanticEmbeddingIndex(graph, unsafeMetadata, { maxDocuments: 1 }), /Embedding backend output objects must contain enumerable data properties only/);
+  assert.equal(metadataGetterCalls, 0);
+});

@@ -1,3 +1,4 @@
+import { normalizeBoundedModelInput, normalizeBoundedModelJsonObject } from './model-input.js';
 import { normalizeModelRoutingPolicy } from './model-router.js';
 import { operationLogChecksum } from './operation-log.js';
 import { createPlannerSnapshot } from './providers.js';
@@ -11,6 +12,10 @@ const SEMANTIC_EMBEDDING_SOURCE_SCHEMA = 'media.semantic-embedding-source.v1';
 const SEMANTIC_EMBEDDING_CACHE_SCHEMA = 'media.semantic-embedding-cache-key.v1';
 const DEFAULT_BATCH_SIZE = 32;
 const MAX_DOCUMENT_TEXT_CHARS = 4096;
+const MAX_EMBED_OUTPUT_BYTES = 16 * 1024 * 1024;
+const MAX_EMBED_OUTPUT_ENTRIES = 1_100_000;
+const MAX_EMBED_METADATA_BYTES = 64 * 1024;
+const EMBED_OUTPUT_KEYS = new Set(['vectors', 'metadata']);
 
 function requireRouter(router) {
   if (!router || typeof router.execute !== 'function') throw new Error('Semantic embedding requires a model router');
@@ -51,14 +56,22 @@ function embeddingSource(graph, kinds) {
 }
 function validateVector(vector, expectedDimensions = null) {
   if (!Array.isArray(vector) && !ArrayBuffer.isView(vector)) throw new Error('Embedding vector must be an array');
-  const values = Array.from(vector, Number);
+  const values = Array.from(vector);
   if (!values.length || values.length > MAX_SEMANTIC_EMBEDDING_DIMENSIONS) throw new Error(`Embedding vector dimensions must be between 1 and ${MAX_SEMANTIC_EMBEDDING_DIMENSIONS}`);
   if (expectedDimensions != null && values.length !== expectedDimensions) throw new Error(`Embedding vector dimensions ${values.length} do not match expected ${expectedDimensions}`);
-  if (values.some((value) => !Number.isFinite(value))) throw new Error('Embedding vector values must be finite');
+  if (values.some((value) => typeof value !== 'number' || !Number.isFinite(value))) throw new Error('Embedding vector values must be finite numbers');
   return values;
 }
 function normalizeEmbedOutput(output, expectedCount, expectedDimensions = null) {
-  const vectors = output?.vectors;
+  const safe = normalizeBoundedModelInput(output, 'Embedding backend output', {
+    maxBytes: MAX_EMBED_OUTPUT_BYTES,
+    maxEntries: MAX_EMBED_OUTPUT_ENTRIES,
+    maxDepth: 24,
+    allowBinary: true,
+  });
+  if (!safe || typeof safe !== 'object' || Array.isArray(safe)) throw new Error('Embedding backend output must be an object');
+  for (const key of Object.keys(safe)) if (!EMBED_OUTPUT_KEYS.has(key)) throw new Error(`Unsupported embedding backend output field: ${key}`);
+  const vectors = safe.vectors;
   if (!Array.isArray(vectors) || vectors.length !== expectedCount) throw new Error(`Embedding backend must return exactly ${expectedCount} vectors`);
   let dimensions = expectedDimensions;
   const normalized = vectors.map((vector) => {
@@ -66,11 +79,8 @@ function normalizeEmbedOutput(output, expectedCount, expectedDimensions = null) 
     dimensions ??= clean.length;
     return clean;
   });
-  return {
-    vectors: normalized,
-    dimensions,
-    metadata: output?.metadata && typeof output.metadata === 'object' && !Array.isArray(output.metadata) ? { ...output.metadata } : {},
-  };
+  const metadata = safe.metadata === undefined ? {} : normalizeBoundedModelJsonObject(safe.metadata, 'Embedding backend metadata', { maxBytes: MAX_EMBED_METADATA_BYTES });
+  return { vectors: normalized, dimensions, metadata };
 }
 function cosine(a, b) {
   let dot = 0; let aa = 0; let bb = 0;
