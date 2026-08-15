@@ -37,6 +37,38 @@ test('proposal session rejects partial selection for atomic-review plans', () =>
   assert.doesNotThrow(() => restyleSession.select([0, 1, 2]));
 });
 
+test('review panel renders bounded workflow summaries without hidden task payloads', () => {
+  let markup = '';
+  const form = { insertAdjacentHTML(position, value) { markup = value; } };
+  const root = {
+    querySelector(selector) {
+      if (selector === '#agent-form') return form;
+      if (selector === '#agent-form button[type="submit"]') return { textContent: '' };
+      return null;
+    },
+  };
+  renderAgentReviewPanel(root, {
+    status: 'pending',
+    plan: { metadata: {} },
+    workflow: {
+      taskCount: 66,
+      assetWriteCount: 2,
+      truncatedTaskCount: 2,
+      tasks: [
+        { id: '<script>task</script>', kind: 'semantic-enrichment', status: 'complete', optional: false, dependencyCount: 0, payload: { secret: 'never-render' } },
+        { id: 'optional-image', kind: 'generate-media', status: 'failed', optional: true, dependencyCount: 1, error: 'private-backend-error' },
+      ],
+    },
+    review: { summary: 'Delegated proposal', intent: 'delegate', provider: { label: 'Router' }, revision: 1, operations: [{ index: 0, type: 'node.add', summary: 'Add result', changes: [] }] },
+  });
+  assert.match(markup, /data-agent-workflow-review/);
+  assert.match(markup, /&lt;script&gt;task&lt;\/script&gt;/);
+  assert.match(markup, /semantic-enrichment · complete · 0 dependencies/);
+  assert.match(markup, /generate-media · failed · 1 dependency · optional/);
+  assert.match(markup, /2 additional tasks omitted/);
+  assert.doesNotMatch(markup, /never-render|private-backend-error/);
+});
+
 test('review panel disables operation toggles for atomic proposals', () => {
   let markup = '';
   const form = { insertAdjacentHTML(position, value) { markup = value; } };

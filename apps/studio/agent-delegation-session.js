@@ -1,3 +1,31 @@
+import { assertAgentWorkflow } from '../../packages/core/src/agent-workflow.js';
+
+export const MAX_AGENT_DELEGATION_REVIEW_TASKS = 64;
+export const MAX_AGENT_DELEGATION_REVIEW_ID_CHARS = 160;
+
+function boundedReviewText(value, limit) {
+  const text = String(value ?? '');
+  return text.length <= limit ? text : `${text.slice(0, Math.max(0, limit - 1))}…`;
+}
+
+export function summarizeAgentDelegationWorkflow(workflow, { assetWriteCount = 0 } = {}) {
+  assertAgentWorkflow(workflow);
+  const tasks = workflow.tasks.slice(0, MAX_AGENT_DELEGATION_REVIEW_TASKS).map((task) => ({
+    id: boundedReviewText(task.id, MAX_AGENT_DELEGATION_REVIEW_ID_CHARS),
+    kind: task.kind,
+    status: task.status,
+    optional: task.optional === true,
+    dependencyCount: task.dependsOn.length,
+  }));
+  return {
+    id: boundedReviewText(workflow.id, MAX_AGENT_DELEGATION_REVIEW_ID_CHARS),
+    taskCount: workflow.tasks.length,
+    assetWriteCount: Math.max(0, Number(assetWriteCount) || 0),
+    tasks,
+    truncatedTaskCount: Math.max(0, workflow.tasks.length - tasks.length),
+  };
+}
+
 export class AgentDelegationSession {
   constructor({ proposalSession, workflowSession } = {}) {
     if (!proposalSession || typeof proposalSession.adopt !== 'function' || typeof proposalSession.apply !== 'function' || typeof proposalSession.discard !== 'function') throw new Error('Agent delegation session requires a proposal session');
@@ -11,11 +39,9 @@ export class AgentDelegationSession {
     const proposal = this.proposalSession.snapshot();
     return {
       ...proposal,
-      workflow: this.pendingWorkflow ? {
-        id: this.pendingWorkflow.workflow.id,
-        taskCount: this.pendingWorkflow.workflow.tasks.length,
+      workflow: this.pendingWorkflow ? summarizeAgentDelegationWorkflow(this.pendingWorkflow.workflow, {
         assetWriteCount: this.pendingWorkflow.persistContext?.assetWrites?.length ?? 0,
-      } : null,
+      }) : null,
     };
   }
 
