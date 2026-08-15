@@ -114,3 +114,30 @@ test('automatic prune failure stays inspectable without invalidating a usable in
   assert.equal(result.cachePrune, null);
   assert.match(result.cachePruneError.message, /derived list unavailable/);
 });
+
+test('prune rejects getter-bearing list records without executing them', async () => {
+  const graph = createGraph('Unsafe records');
+  let metadataGetterCalls = 0;
+  const forged = { key: 'semantic-embedding:old' };
+  Object.defineProperty(forged, 'metadata', { enumerable: true, get() { metadataGetterCalls += 1; return { schema: SEMANTIC_EMBEDDING_INDEX_SCHEMA, projectId: graph.projectId, sourceFingerprint: 'old', kinds: null }; } });
+  const cache = new SemanticEmbeddingCache({ router: router(), list: async () => [forged], remove: async () => true });
+  await assert.rejects(() => cache.pruneStale(graph), /record metadata must be an enumerable object data property/);
+  assert.equal(metadataGetterCalls, 0);
+});
+
+test('prune rejects accessor array entries and method options without executing them', async () => {
+  const graph = createGraph('Unsafe prune');
+  let entryGetterCalls = 0;
+  const records = [];
+  Object.defineProperty(records, '0', { enumerable: true, get() { entryGetterCalls += 1; return record('semantic-embedding:old', { projectId: graph.projectId }); } });
+  records.length = 1;
+  const cache = new SemanticEmbeddingCache({ router: router(), list: async () => records, remove: async () => true });
+  await assert.rejects(() => cache.pruneStale(graph), /list must contain enumerable data records/);
+  assert.equal(entryGetterCalls, 0);
+
+  let optionGetterCalls = 0;
+  const options = {};
+  Object.defineProperty(options, 'kinds', { enumerable: true, get() { optionGetterCalls += 1; return null; } });
+  await assert.rejects(() => cache.pruneStale(graph, options), /prune options must contain enumerable data fields only/);
+  assert.equal(optionGetterCalls, 0);
+});

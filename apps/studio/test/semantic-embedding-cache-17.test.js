@@ -59,3 +59,25 @@ test('cache returns the detached normalized index instead of the loaded object',
   const first=await cache.getOrCreate(graph,{kinds:['object']});const stored=records.get(first.key).value;const second=await cache.getOrCreate(graph,{kinds:['object']});
   assert.equal(second.cached,true);assert.notEqual(second.index,stored);assert.notEqual(second.index.documents,stored.documents);assert.deepEqual(second.index,stored);
 });
+
+test('cache constructor rejects accessors and router method getters without executing them',()=>{
+  let optionGetterCalls=0;const options={};Object.defineProperty(options,'router',{enumerable:true,get(){optionGetterCalls+=1;return router({count:0});}});
+  assert.throws(()=>new SemanticEmbeddingCache(options),/constructor options must contain enumerable data fields only/);assert.equal(optionGetterCalls,0);
+  let methodGetterCalls=0;const forgedRouter={list(){return[];}};Object.defineProperty(forgedRouter,'execute',{enumerable:true,get(){methodGetterCalls+=1;return()=>{};}});
+  assert.throws(()=>new SemanticEmbeddingCache({router:forgedRouter}),/router execute must be a data method/);assert.equal(methodGetterCalls,0);
+});
+
+test('cache getOrCreate rejects accessor and coercive options before routing or storage',async()=>{
+  const graph=createGraph('Film'),counter={count:0};let loads=0;const cache=new SemanticEmbeddingCache({router:router(counter),load:async()=>{loads+=1;return null;},save:async()=>true,remove:async()=>true});
+  let getterCalls=0;const options={};Object.defineProperty(options,'kinds',{enumerable:true,get(){getterCalls+=1;return['object'];}});
+  await assert.rejects(()=>cache.getOrCreate(graph,options),/getOrCreate options must contain enumerable data fields only/);assert.equal(getterCalls,0);assert.equal(loads,0);assert.equal(counter.count,0);
+  let coercions=0;const forged={toString(){coercions+=1;return'object';}};await assert.rejects(()=>cache.getOrCreate(graph,{kinds:[forged]}),/kinds must be non-empty strings/);assert.equal(coercions,0);assert.equal(loads,0);
+  await assert.rejects(()=>cache.getOrCreate(graph,{unexpected:true}),/Unsupported Semantic embedding cache getOrCreate options field: unexpected/);assert.equal(loads,0);
+});
+
+test('cache snapshots routing policy before asynchronous storage work',async()=>{
+  const graph=createGraph('Film');const policy={deniedBackendIds:[]};let loadCalls=0;
+  const cache=new SemanticEmbeddingCache({router:router({count:0}),load:async()=>{loadCalls+=1;policy.deniedBackendIds.push('embedder');return null;},save:async()=>true,remove:async()=>true});
+  const result=await cache.getOrCreate(graph,{policy,maxDocuments:1});
+  assert.equal(loadCalls,1);assert.equal(result.cached,false);assert.ok(result.index.documents.length>0);assert.deepEqual(policy.deniedBackendIds,['embedder']);
+});
