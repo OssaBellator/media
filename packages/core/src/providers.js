@@ -27,6 +27,9 @@ const WORKFLOW_PROVIDER_KEYS = new Set(["id", "label", "capabilities", "proposeW
 const MODEL_PLANNER_FACTORY_KEYS = new Set(["router", "id", "label", "policy", "contextMode", "semanticContextOptions"]);
 const HTTP_PLANNER_FACTORY_KEYS = new Set(["id", "label", "endpoint", "headers", "timeoutMs", "maxResponseBytes", "maxRequestBytes", "fetchImpl"]);
 const SEMANTIC_CONTEXT_OPTION_KEYS = new Set(["limit", "neighborDepth", "maxNodes", "kinds"]);
+const PLANNER_SNAPSHOT_OPTION_KEYS = new Set(["focusNodeIds", "neighborDepth", "maxNodes"]);
+export const MAX_PLANNER_FOCUS_NODE_IDS = 4096;
+export const MAX_PLANNER_FOCUS_NODE_ID_CHARS = 512;
 
 function utf8Bytes(text) { return new TextEncoder().encode(text).byteLength; }
 export function normalizePlannerIntent(intent, label = "Planner intent") {
@@ -106,6 +109,16 @@ function normalizeSemanticContextOptions(value = {}) {
     normalized.kinds = [...new Set(clean.kinds.map((kind) => kind.trim()))];
   }
   return Object.freeze(normalized);
+}
+function normalizePlannerSnapshotOptions(value = {}) {
+  const clean = normalizeFactoryDescriptor(value, "Planner snapshot", PLANNER_SNAPSHOT_OPTION_KEYS);
+  const focusNodeIds = clean.focusNodeIds == null ? null : normalizeBoundedModelInput(clean.focusNodeIds, "Planner focus node ids", { maxBytes: 2 * 1024 * 1024, maxDepth: 2, maxEntries: MAX_PLANNER_FOCUS_NODE_IDS, allowBinary: false });
+  if (focusNodeIds !== null && (!Array.isArray(focusNodeIds) || focusNodeIds.some((id) => typeof id !== "string" || !id.trim() || id.length > MAX_PLANNER_FOCUS_NODE_ID_CHARS))) throw new Error("Planner focus node ids must be bounded strings");
+  return Object.freeze({
+    focusNodeIds: focusNodeIds === null ? null : Object.freeze([...new Set(focusNodeIds.map((id) => id.trim()))]),
+    neighborDepth: strictFactoryNumber(clean.neighborDepth, "Planner snapshot neighborDepth", { fallback: 0, min: 0, max: 4 }),
+    maxNodes: strictFactoryNumber(clean.maxNodes, "Planner snapshot maxNodes", { fallback: 256, min: 1, max: 4096 }),
+  });
 }
 function normalizeHttpPlannerHeaders(value = {}) {
   const clean = normalizeBoundedModelJsonObject(value, "HTTP planner headers", { maxBytes: MAX_HTTP_PLANNER_HEADERS_BYTES });
@@ -310,16 +323,16 @@ function plannerVisibleNodeIds(graph) {
   return new Set(Object.values(graph.nodes).filter((node) => plannerObjectModelAccess(node) !== "none").map((node) => node.id));
 }
 function focusedPlannerNodeIds(graph, visible, focusNodeIds, { neighborDepth = 0, maxNodes = 256 } = {}) {
-  const limit = Math.max(1, Math.min(4096, Math.round(Number(maxNodes) || 256)));
+  const limit = maxNodes;
   const included = new Set();
   if (visible.has(graph.projectId)) included.add(graph.projectId);
-  let frontier = [...new Set((focusNodeIds ?? []).map(String))].filter((id) => visible.has(id)).sort();
+  let frontier = [...new Set(focusNodeIds ?? [])].filter((id) => visible.has(id)).sort();
   for (const id of frontier) {
     if (included.size >= limit) break;
     included.add(id);
   }
   const edges = Object.values(graph.edges).sort((a, b) => a.id.localeCompare(b.id));
-  const depth = Math.max(0, Math.min(4, Math.round(Number(neighborDepth) || 0)));
+  const depth = neighborDepth;
   for (let level = 0; level < depth && frontier.length && included.size < limit; level += 1) {
     const next = new Set();
     const expandable = new Set(frontier.filter((id) => id !== graph.projectId));
@@ -337,7 +350,8 @@ function focusedPlannerNodeIds(graph, visible, focusNodeIds, { neighborDepth = 0
   return included;
 }
 
-export function createPlannerSnapshot(graph, { focusNodeIds = null, neighborDepth = 0, maxNodes = 256 } = {}) {
+export function createPlannerSnapshot(graph, options = {}) {
+  const { focusNodeIds, neighborDepth, maxNodes } = normalizePlannerSnapshotOptions(options);
   const visible = plannerVisibleNodeIds(graph);
   const included = focusNodeIds == null ? visible : focusedPlannerNodeIds(graph, visible, focusNodeIds, { neighborDepth, maxNodes });
   const nodes = Object.fromEntries(Object.entries(graph.nodes).filter(([id]) => included.has(id)).map(([id, node]) => {
@@ -359,7 +373,12 @@ export function createPlannerSnapshot(graph, { focusNodeIds = null, neighborDept
   return { version: graph.version, projectId: graph.projectId, nodes, edges };
 }
 
-export function createPlannerSemanticContext(graph, intent, { limit = 12, neighborDepth = 1, maxNodes = 256, kinds = null } = {}) {
+export function createPlannerSemanticContext(graph, intent, options = {}) {
+  const clean = normalizeSemanticContextOptions(options);
+  const limit = clean.limit ?? 12;
+  const neighborDepth = clean.neighborDepth ?? 1;
+  const maxNodes = clean.maxNodes ?? 256;
+  const kinds = clean.kinds ?? null;
   const safeGraph = createPlannerSnapshot(graph);
   const searchKinds = kinds ?? ["asset", "composition", "track", "clip", "layer", "effect", "output", "object"];
   const matches = searchSemanticGraph(safeGraph, intent, { limit, kinds: searchKinds });

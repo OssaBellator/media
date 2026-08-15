@@ -3,7 +3,7 @@ import test from 'node:test';
 import { createGraph, createNode } from '../src/graph.js';
 import { applyOperations } from '../src/operations.js';
 import { createCreativeObjectOperations, linkCreativeObjectOperations } from '../src/creative-object.js';
-import { createPlannerSemanticContext, createPlannerSnapshot } from '../src/providers.js';
+import { MAX_PLANNER_FOCUS_NODE_IDS, createPlannerSemanticContext, createPlannerSnapshot } from '../src/providers.js';
 
 test('focused planner snapshots include requested nodes and bounded neighbors without expanding the project root', () => {
   let graph = createGraph('Film');
@@ -65,4 +65,47 @@ test('focused context respects a hard node ceiling', () => {
   }
   const snapshot = createPlannerSnapshot(graph, { focusNodeIds: [centralId], neighborDepth: 1, maxNodes: 5 });
   assert.equal(Object.keys(snapshot.nodes).length, 5);
+});
+
+
+test('planner snapshot options reject accessors and coercive focus ids before traversal', () => {
+  const graph = createGraph('Strict snapshot');
+  let optionGetterCalls = 0;
+  const options = {};
+  Object.defineProperty(options, 'neighborDepth', { enumerable: true, get() { optionGetterCalls += 1; return 1; } });
+  assert.throws(() => createPlannerSnapshot(graph, options), /config must contain enumerable data fields only/);
+  assert.equal(optionGetterCalls, 0);
+
+  let idGetterCalls = 0;
+  const ids = [];
+  Object.defineProperty(ids, '0', { enumerable: true, get() { idGetterCalls += 1; return graph.projectId; } });
+  ids.length = 1;
+  assert.throws(() => createPlannerSnapshot(graph, { focusNodeIds: ids }), /dense data arrays/);
+  assert.equal(idGetterCalls, 0);
+
+  let idCoercions = 0;
+  const fakeId = { toString() { idCoercions += 1; return graph.projectId; } };
+  assert.throws(() => createPlannerSnapshot(graph, { focusNodeIds: [fakeId] }), /contains unsupported function data/);
+  assert.equal(idCoercions, 0);
+  assert.throws(() => createPlannerSnapshot(graph, { maxNodes: '5' }), /maxNodes must be an integer/);
+  assert.throws(() => createPlannerSnapshot(graph, { neighborDepth: 5 }), /neighborDepth must be an integer/);
+  assert.throws(() => createPlannerSnapshot(graph, { hidden: true }), /Unsupported planner snapshot config field: hidden/);
+});
+
+test('planner snapshot focus list has a hard identity-count ceiling', () => {
+  const graph = createGraph('Focus ceiling');
+  const ids = Array.from({ length: MAX_PLANNER_FOCUS_NODE_IDS + 1 }, (_, index) => `node-${index}`);
+  assert.throws(() => createPlannerSnapshot(graph, { focusNodeIds: ids }), /exceeds 4096 entries/);
+});
+
+test('semantic planner context options reject accessors and string-number coercion', () => {
+  const graph = createGraph('Strict semantic context');
+  let getterCalls = 0;
+  const options = {};
+  Object.defineProperty(options, 'limit', { enumerable: true, get() { getterCalls += 1; return 4; } });
+  assert.throws(() => createPlannerSemanticContext(graph, 'film', options), /context options must be JSON-safe/i);
+  assert.equal(getterCalls, 0);
+  assert.throws(() => createPlannerSemanticContext(graph, 'film', { limit: '4' }), /limit must be an integer/);
+  assert.throws(() => createPlannerSemanticContext(graph, 'film', { maxNodes: 4097 }), /maxNodes must be an integer/);
+  assert.throws(() => createPlannerSemanticContext(graph, 'film', { hidden: true }), /Unsupported semantic planner context option: hidden/);
 });
