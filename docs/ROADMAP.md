@@ -14,7 +14,8 @@
 - MP4 scale projection, stress command and longitudinal conformance history;
 - Cut and composition-delivery runtime sessions with direct in-memory graph ownership in Studio;
 - deterministic checksummed operation-log primitives plus atomic IndexedDB graph/journal checkpoints and recovery validation;
-- serialized Studio `ProjectJournalSession` plus `HistoryJournalSession`, now wired into `app.js` for persistence-first edit/Agent/undo/redo/import/project-open recovery.
+- serialized Studio `ProjectJournalSession` plus `HistoryJournalSession`, wired into `app.js` for persistence-first edit/Agent/undo/redo/import/project-open recovery;
+- media import/relink Blob writes committed atomically with their graph+journal checkpoint through one IndexedDB transaction.
 
 ## Next hardening
 
@@ -24,4 +25,4 @@
 4. signed/integrity-pinned codec plugin packaging and real native/WASM codec distributions;
 5. larger encrypted/adaptive real-media corpus plus HLS/DASH live lab fixtures;
 6. integrate MP4 chunk planning directly into final writer interleave policy and stress multi-day outputs;
-7. make asset Blob import/relink atomic with graph+journal checkpoints, then add authenticated collaboration and distributed render execution.
+7. add journal compaction/rolling base checkpoints and asset garbage collection, then authenticated collaboration and distributed render execution.

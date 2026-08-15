@@ -63,7 +63,7 @@ import { createCutPlaybackRuntime } from "./cut-playback-runtime.js";
 import { createCompositionDeliveryRuntime } from "./composition-delivery-runtime.js";
 import { BrowserAudioMixer } from "./audio-engine.js";
 import { HistoryJournalSession, recoverHistoryJournalSession } from "./history-journal-session.js";
-import { findStoredAssetByHash, loadAssetBlob, loadStoredGraph, loadStoredOperationRecovery, localAssetUri, saveAssetBlob, saveStoredGraph, saveStoredGraphWithOperation } from "./storage.js";
+import { findStoredAssetByHash, loadAssetBlob, loadStoredGraph, loadStoredOperationRecovery, localAssetUri, saveAssetBlob, saveStoredGraph, saveStoredGraphWithOperation, saveStoredGraphWithOperationAndAssets } from "./storage.js";
 
 const APP_VERSION = "0.16.0";
 const app = document.querySelector("#app");
@@ -173,9 +173,12 @@ function invalidateRuntimeGraph({ sources = false, assetId = null } = {}) {
   deliveryRuntime.cancelAll();
 }
 
-async function persistJournalGraph(nextGraph, entry) {
+async function persistJournalGraph(nextGraph, entry, persistContext = null) {
   assertProjectInvariants(nextGraph);
-  const saved = await saveStoredGraphWithOperation(nextGraph, entry);
+  const assetWrites = persistContext?.assetWrites ?? [];
+  const saved = assetWrites.length
+    ? await saveStoredGraphWithOperationAndAssets(nextGraph, entry, assetWrites)
+    : await saveStoredGraphWithOperation(nextGraph, entry);
   persistenceStatus = saved ? `Saved locally · journal ${entry.sequence}` : "Session-only storage";
   return saved;
 }
@@ -268,18 +271,21 @@ function bindEvents() {
   bindCanvasDragging();
 }
 
-async function applyEdit(label, operations, { selectId } = {}) {
+async function applyEdit(label, operations, { selectId, persistContext = null, invalidation = null, afterCommit = null } = {}) {
+  let committed = null;
   try {
-    const result = await historyJournal.edit(label, operations, { source: "studio" });
-    adoptJournalHistory(result);
-    if (selectId && result.graph.nodes[selectId]) selectedId = selectId;
-    invalidateRuntimeGraph();
-    activity.unshift({ title: label, detail: `${operations.length} validated operation${operations.length === 1 ? "" : "s"} committed atomically at journal ${result.entry.sequence}.`, operations: operations.map((operation) => operation.type) });
+    committed = await historyJournal.edit(label, operations, { source: "studio" }, { persistContext });
+    adoptJournalHistory(committed);
+    if (selectId && committed.graph.nodes[selectId]) selectedId = selectId;
+    await afterCommit?.(committed);
+    invalidateRuntimeGraph(invalidation ?? {});
+    activity.unshift({ title: label, detail: `${operations.length} validated operation${operations.length === 1 ? "" : "s"} committed atomically at journal ${committed.entry.sequence}.`, operations: operations.map((operation) => operation.type) });
   } catch (error) {
     persistenceStatus = `Save failed: ${error.message}`;
     activity.unshift({ title: `${label} failed`, detail: error.message, operations: [] });
   }
   render();
+  return committed;
 }
 
 function executeCanvasAction(action) {
@@ -694,16 +700,21 @@ async function importFiles(event) {
     let asset = createAsset({ name: file.name, mimeType: file.type, size: file.size, ...metadata });
     asset = { ...asset, props: { ...asset.props, uri: localAssetUri(asset.id) } };
     saved.push([asset, file]);
-    assetUrls.set(asset.id, URL.createObjectURL(file));
   }
-  await Promise.all(saved.map(([asset, file]) => saveAssetBlob(asset.id, file, { ...asset.props, name: asset.name }).catch(() => false)));
   const label = `Import ${files.length} media file${files.length === 1 ? "" : "s"}`;
-  const result = await historyJournal.commitGraphFactory(label, (current) => saved.reduce((next, [asset]) => addAsset(next, asset), current), { source: "media-import" });
-  adoptJournalHistory(result);
-  invalidateRuntimeGraph({ sources: true }); audioMixer.clearCache();
-  const newestAsset = nodesByKind(graph(), "asset").at(-1);
-  if (newestAsset) selectedId = newestAsset.id;
-  activity.unshift({ title: "Media imported", detail: `${files.length} asset${files.length === 1 ? "" : "s"} analyzed, fingerprinted and persisted. Audio assets include lightweight waveform data when decoding is available.`, operations: ["probe", "node.add", "edge.add", "indexeddb.put"] });
+  try {
+    const assetWrites = saved.map(([asset, file]) => ({ assetId: asset.id, blob: file, metadata: { ...asset.props, name: asset.name } }));
+    const result = await historyJournal.commitGraphFactory(label, (current) => saved.reduce((next, [asset]) => addAsset(next, asset), current), { source: "media-import" }, { persistContext: { assetWrites } });
+    adoptJournalHistory(result);
+    for (const [asset, file] of saved) assetUrls.set(asset.id, URL.createObjectURL(file));
+    invalidateRuntimeGraph({ sources: true }); audioMixer.clearCache();
+    const newestAsset = nodesByKind(graph(), "asset").at(-1);
+    if (newestAsset) selectedId = newestAsset.id;
+    activity.unshift({ title: "Media imported", detail: `${files.length} asset${files.length === 1 ? "" : "s"} analyzed, fingerprinted and committed with source Blobs in one local transaction.`, operations: ["probe", "journal.add", "asset.put", "workspace.put"] });
+  } catch (error) {
+    persistenceStatus = `Import failed: ${error.message}`;
+    activity.unshift({ title: "Media import failed", detail: error.message, operations: [] });
+  }
   render();
 }
 
@@ -718,12 +729,17 @@ async function relinkSelectedAsset(event) {
   }
   persistenceStatus = `Analyzing replacement for ${asset.name}…`; render();
   const metadata = await probeMedia(file);
-  await saveAssetBlob(asset.id, file, { ...asset.props, ...metadata, name: file.name, mimeType: file.type, size: file.size });
-  if (assetUrls.has(asset.id)) URL.revokeObjectURL(assetUrls.get(asset.id));
-  assetUrls.set(asset.id, URL.createObjectURL(file));
-  invalidateRuntimeGraph({ assetId: asset.id }); audioMixer.clearCache();
   const patch = { uri: localAssetUri(asset.id), mimeType: file.type, size: file.size, ...metadata };
-  applyEdit(`Relink ${asset.name}`, [{ type: "node.update", nodeId: asset.id, patch: { props: patch } }], { selectId: asset.id });
+  await applyEdit(`Relink ${asset.name}`, [{ type: "node.update", nodeId: asset.id, patch: { props: patch } }], {
+    selectId: asset.id,
+    persistContext: { assetWrites: [{ assetId: asset.id, blob: file, metadata: { ...asset.props, ...metadata, name: file.name, mimeType: file.type, size: file.size } }] },
+    invalidation: { assetId: asset.id },
+    afterCommit: async () => {
+      if (assetUrls.has(asset.id)) URL.revokeObjectURL(assetUrls.get(asset.id));
+      assetUrls.set(asset.id, URL.createObjectURL(file));
+      audioMixer.clearCache();
+    },
+  });
 }
 
 async function importProjectFile(event) {
