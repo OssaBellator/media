@@ -30,6 +30,28 @@ function replaceGeneratedAssetOperation(operations, asset) {
   return operations.map((operation) => operation.type === 'node.add' && operation.node?.id === asset.id ? { ...operation, node: asset } : operation);
 }
 
+export function prepareGeneratedMediaPersistence(routed, { assetUri = (assetId) => `media://asset/${assetId}` } = {}) {
+  if (!routed?.asset || !routed?.generation) throw new Error('Generated media persistence requires a routed generation result');
+  if (typeof assetUri !== 'function') throw new Error('Generated media assetUri must be a function');
+  const mimeType = routed.asset.props?.mimeType ?? routed.artifact?.mimeType ?? '';
+  const blob = generatedPayloadBlob(routed.payload, mimeType);
+  const declaredSize = Number(routed.asset.props?.size ?? 0);
+  if (declaredSize > 0 && declaredSize !== blob.size) throw new Error(`Generated artifact size ${declaredSize} does not match payload size ${blob.size}`);
+  const asset = { ...routed.asset, props: { ...routed.asset.props, uri: assetUri(routed.asset.id), size: blob.size } };
+  const operations = replaceGeneratedAssetOperation(routed.operations, asset);
+  const metadata = {
+    source: 'model',
+    generation: {
+      id: routed.generation.id,
+      operation: routed.generation.operation,
+      backendId: routed.backendId,
+      parentPlanId: routed.generation.parentPlanId,
+    },
+  };
+  const persistContext = { assetWrites: [{ assetId: asset.id, blob, metadata: persistedAssetMetadata(asset, blob.size) }] };
+  return { asset, operations, blob, metadata, persistContext };
+}
+
 export class GeneratedMediaCommitSession {
   constructor({ router, getGraph, commit, assetUri = (assetId) => `media://asset/${assetId}` } = {}) {
     if (!router || typeof router.execute !== 'function') throw new Error('Generated media commit session requires a model router');
@@ -42,24 +64,9 @@ export class GeneratedMediaCommitSession {
   async generate(options = {}) {
     const graph = this.getGraph();
     const routed = await runGeneratedMediaModel(this.router, graph, options);
-    const mimeType = routed.asset.props?.mimeType ?? routed.artifact?.mimeType ?? '';
-    const blob = generatedPayloadBlob(routed.payload, mimeType);
-    const declaredSize = Number(routed.asset.props?.size ?? 0);
-    if (declaredSize > 0 && declaredSize !== blob.size) throw new Error(`Generated artifact size ${declaredSize} does not match payload size ${blob.size}`);
-    const asset = { ...routed.asset, props: { ...routed.asset.props, uri: this.assetUri(routed.asset.id), size: blob.size } };
-    const operations = replaceGeneratedAssetOperation(routed.operations, asset);
-    const metadata = {
-      source: 'model',
-      generation: {
-        id: routed.generation.id,
-        operation: routed.generation.operation,
-        backendId: routed.backendId,
-        parentPlanId: routed.generation.parentPlanId,
-      },
-    };
-    const persistContext = { assetWrites: [{ assetId: asset.id, blob, metadata: persistedAssetMetadata(asset, blob.size) }] };
-    const label = options.label || `${routed.generation.operation} · ${asset.name}`;
-    const result = await this.commit(label, operations, metadata, { persistContext });
-    return { ...routed, asset, operations, blob, metadata, persistContext, result };
+    const prepared = prepareGeneratedMediaPersistence(routed, { assetUri: this.assetUri });
+    const label = options.label || `${routed.generation.operation} · ${prepared.asset.name}`;
+    const result = await this.commit(label, prepared.operations, prepared.metadata, { persistContext: prepared.persistContext });
+    return { ...routed, ...prepared, result };
   }
 }

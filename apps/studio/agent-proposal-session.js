@@ -7,6 +7,14 @@ function requireFunction(value, label) {
   return value;
 }
 
+function persistContextForOperations(persistContext, operations) {
+  if (!persistContext) return undefined;
+  const assetIds = new Set(operations.filter((operation) => operation.type === 'node.add' && operation.node?.kind === 'asset').map((operation) => operation.node.id));
+  const next = { ...persistContext };
+  if (Array.isArray(persistContext.assetWrites)) next.assetWrites = persistContext.assetWrites.filter((write) => assetIds.has(String(write.assetId)));
+  return next;
+}
+
 export class AgentProposalSession {
   constructor({ provider, getGraph, commit } = {}) {
     if (!provider || typeof provider.plan !== 'function') throw new Error('Agent proposal session requires a planner provider');
@@ -47,13 +55,14 @@ export class AgentProposalSession {
     return plan;
   }
 
-  async apply({ operationIndexes = null, metadata = {} } = {}) {
+  async apply({ operationIndexes = null, metadata = {}, persistContext = undefined } = {}) {
     if (!this.pending) throw new Error('No Agent proposal is pending');
     if (operationIndexes != null) this.select(operationIndexes);
     const plan = this.pending;
     const transaction = createAgentPlanTransaction(this.getGraph(), plan, { metadata });
-    const result = await this.commit(transaction.label, transaction.operations, transaction.metadata);
+    const filteredPersistContext = persistContextForOperations(persistContext, transaction.operations);
+    const result = await this.commit(transaction.label, transaction.operations, transaction.metadata, filteredPersistContext ? { persistContext: filteredPersistContext } : {});
     this.pending = null;
-    return { plan, transaction, result };
+    return { plan, transaction, persistContext: filteredPersistContext, result };
   }
 }
