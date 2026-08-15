@@ -10,6 +10,7 @@
 - persistent per-variant/per-track WebCodecs submission from incrementally indexed CMAF fragments, with queue backpressure, init-reset handling and encrypted-sample rejection;
 - bounded decoded video/audio live queues plus playhead-driven presentation scheduling and representation-switch cleanup;
 - browser live output that reuses the Cut kernel canvas and schedules decoded AudioData on an AudioContext clock with late-sample offsets and drift correction;
+- DASH video routing through the normal Cut composition frame-provider seam, preserving clip source-time, transforms, masks, effects, temporal rendering and GPU/Canvas composition while leaving ordinary file assets on the existing kernel provider;
 - 188-byte MPEG-TS ingest for legacy HLS with PAT/PMT, PES, timestamp unwrap, H.264/H.265 access units and AAC/ADTS reframing;
 - trusted `media.codec.v1` plugin backends and async production kernel startup;
 - display/HDR output policy applied at GPU renderer construction;
@@ -27,7 +28,7 @@
 
 ## Next hardening
 
-1. route adaptive DASH sources through `DashCmafBrowserPlaybackSession` from the normal Cut source/runtime boundary and add real live-media fixtures for end-to-end latency/conformance;
+1. propagate explicit scrub/playback mode into composition frame-provider requests so continuous DASH playback can avoid per-frame decoder flushes, then add real live-media latency/conformance fixtures and muxed-audio integration for adaptive visual clips;
 2. integrate temporal motion blur/vector mattes into normal Cut GPU scheduling rather than reference-only paths;
 3. platform color management, display calibration and actual HDR swap-chain/output surfaces;
 4. signed/integrity-pinned codec plugin packaging and real native/WASM codec distributions;

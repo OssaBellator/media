@@ -3,6 +3,8 @@ import { CompositionPlaybackEngine } from './composition-playback-engine.js';
 import { createCutFidelityPlayback } from './cut-fidelity-playback.js';
 import { BrowserFrameProvider } from './render-engine.js';
 import { BrowserGpuCompositionRenderer } from './gpu-composition-renderer.js';
+import { KernelCompositionFrameProvider } from './kernel-frame-provider.js';
+import { DashCompositionFrameProvider } from './dash-composition-frame-provider.js';
 import { CutPlaybackSession } from './cut-playback-session.js';
 
 export function createCutPlaybackRuntime({
@@ -10,6 +12,10 @@ export function createCutPlaybackRuntime({
   sourceResolver,
   videoEngine=null,
   fallbackProvider=null,
+  frameProvider=null,
+  dashFrameProvider=null,
+  dashSessionFactory,
+  dashSessionOptions={},
   gpuRenderer=null,
   compositionEngine=null,
   fidelityEngine=null,
@@ -24,11 +30,13 @@ export function createCutPlaybackRuntime({
 }={}){
   const ownedVideo=videoEngine??createCutPlaybackEngine({blobResolver,sourceResolver,workerCount,forceInline,sourceCacheBytes});
   const ownedFallback=fallbackProvider??new BrowserFrameProvider({blobResolver,maxCacheBytes:fallbackCacheBytes,concurrency:2});
+  const ownedBaseFrame=new KernelCompositionFrameProvider({videoEngine:ownedVideo,fallbackProvider:ownedFallback});
+  const ownedFrame=frameProvider??dashFrameProvider??new DashCompositionFrameProvider({baseProvider:ownedBaseFrame,sessionFactory:dashSessionFactory,sessionOptions:dashSessionOptions});
   const ownedGpu=gpuRenderer??new BrowserGpuCompositionRenderer({maxCacheBytes:gpuCacheBytes});
-  const ownedComposition=compositionEngine??new CompositionPlaybackEngine({videoEngine:ownedVideo,fallbackProvider:ownedFallback,gpuRenderer:ownedGpu,maxWidth,maxHeight,maxPixels});
+  const ownedComposition=compositionEngine??new CompositionPlaybackEngine({frameProvider:ownedFrame,gpuRenderer:ownedGpu,maxWidth,maxHeight,maxPixels});
   const ownedFidelity=fidelityEngine??createCutFidelityPlayback({compositionEngine:ownedComposition});
   const session=new CutPlaybackSession({fidelityEngine:ownedFidelity,compositionEngine:ownedComposition,videoEngine:ownedVideo});
-  session.resources={videoEngine:ownedVideo,fallbackProvider:ownedFallback,gpuRenderer:ownedGpu,compositionEngine:ownedComposition,fidelityEngine:ownedFidelity};
+  session.resources={videoEngine:ownedVideo,fallbackProvider:ownedFallback,frameProvider:ownedFrame,gpuRenderer:ownedGpu,compositionEngine:ownedComposition,fidelityEngine:ownedFidelity};
   return session;
 }
 

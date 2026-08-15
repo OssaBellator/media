@@ -49,7 +49,7 @@ export class CutPlaybackSession {
   invalidateAsset(assetId){
     if(this.closed)return;
     this.cancelInteractive();this.metrics.invalidations++;this.metrics.sourceInvalidations++;
-    this.fidelityEngine.reset?.();this.compositionEngine.invalidate();this.videoEngine?.clearAsset?.(assetId);
+    this.fidelityEngine.reset?.();this.compositionEngine.invalidate();this.videoEngine?.clearAsset?.(assetId);this.compositionEngine.frameProvider?.clearAsset?.(assetId);
   }
   stats(){return{...this.metrics,composition:this.compositionEngine.stats?.()??null,video:this.videoEngine?.stats?.()??null,closed:this.closed};}
   close(){if(this.closed)return;this.cancelInteractive();this.closed=true;this.compositionEngine.close?.();this.videoEngine?.close?.();}
