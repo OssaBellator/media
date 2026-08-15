@@ -44,6 +44,17 @@ export class CompositionPlaybackEngine {
     const assetResolver=(id)=>graph.nodes[id];
     const frameProvider=this.frameProvider?.forRequest?.({mode})??this.frameProvider;
     if(shouldTemporalAccumulate(raw,this.lastFidelity)){
+      if(this.gpuRenderer?.supports?.(plan)&&typeof this.gpuRenderer.presentTemporal==='function'){
+        try{
+          const target=surfaceCanvas(container,'webgpu',this.canvasFactory);
+          if(!target)throw new Error('GPU temporal composition target is unavailable');
+          target.width=plan.width;target.height=plan.height;
+          const gpu=await this.gpuRenderer.presentTemporal(target,graph,raw,{evaluate:this.evaluate,scalePlan:this.scalePlan,scaleOptions,assetResolver,frameProvider,priority,signal,fidelity:this.lastFidelity,shouldCommit:()=>generation===this.generation});
+          if(gpu?.stale){this.metrics.stale++;return{stale:true,plan,result:gpu,fidelity:this.lastFidelity};}
+          showSurface(container,'webgpu');this.metrics.presented++;this.metrics.gpu++;this.metrics.temporal++;this.metrics.temporalSamples+=gpu.samples?.length??0;
+          return{...gpu,plan:gpu.plan??plan,canvas:target,fidelity:this.lastFidelity};
+        }catch(error){if(error?.name==='AbortError')throw error;/* preserve deterministic Canvas2D temporal fallback */}
+      }
       const scratch=this.canvasFactory();
       const temporal=await this.temporalRenderer(scratch,graph,raw,{evaluate:this.evaluate,scalePlan:this.scalePlan,scaleOptions,renderer:this.renderer,assetResolver,frameProvider,priority,signal,fidelity:this.lastFidelity,canvasFactory:this.canvasFactory});
       if(generation!==this.generation){this.metrics.stale++;return{stale:true,plan,result:temporal,fidelity:this.lastFidelity};}

@@ -23,9 +23,11 @@ The WebGPU reference graph uses destination-sampled composition rather than trea
 
 ## Temporal rendering
 
-`compileTemporalGpuRenderGraph()` expands a normal supported graph into weighted subframe passes and a temporal resolve node. The CPU `accumulateTemporalFrames()` implementation is the reference result.
+`compileTemporalGpuRenderGraph()` expands a normal supported graph into weighted subframe passes and a temporal resolve node. The CPU `accumulateTemporalFrames()` implementation remains the deterministic reference result.
 
-This temporal graph is not yet the default real-time Cut playback path; it is the contract future GPU scheduling should match.
+Normal Cut playback now uses `BrowserGpuCompositionRenderer.presentTemporal()` for supported **SDR** temporal plans. Each shutter sample is evaluated independently, including per-sample vector-mask adaptation, rendered through the existing GPU graph into a floating-point `rgba16float` scratch target, converted back to linear light in `GpuTemporalAccumulator`, and combined with normalized additive sample weights. The accumulated linear result is converted to the canvas transfer once after all samples. Because the intermediate sample target is floating point, this avoids an 8-bit readback/quantization step while preserving the existing graph compositor and deterministic Canvas2D fallback.
+
+Tone-mapped/HDR temporal plans deliberately remain on the Canvas/reference path for now. The next GPU fidelity step is to expose the graph compositor's pre-final linear working texture so HDR temporal accumulation can happen before tone mapping without the SDR transfer round-trip.
 
 ## HDR ingest
 
