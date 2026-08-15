@@ -30,6 +30,11 @@ const CREATE_OPTION_KEYS = new Set(['policy', 'kinds', 'maxDocuments', 'maxScala
 const SEARCH_OPTION_KEYS = new Set(['limit', 'kinds', 'minimumScore']);
 const QUERY_OPTION_KEYS = new Set(['policy', 'signal', 'limit', 'kinds', 'minimumScore']);
 const HYBRID_OPTION_KEYS = new Set(['limit', 'kinds', 'lexicalWeight', 'embeddingWeight']);
+const EMBEDDING_INDEX_KEYS = new Set(['schema', 'projectId', 'sourceFingerprint', 'backendId', 'dimensions', 'documents', 'routing']);
+const EMBEDDING_DOCUMENT_KEYS = new Set(['id', 'kind', 'name', 'vector']);
+const EMBEDDING_ROUTE_KEYS = new Set(['backendId', 'count']);
+const MAX_EMBEDDING_INDEX_BYTES = 32 * 1024 * 1024;
+const MAX_EMBEDDING_INDEX_ENTRIES = 2_100_000;
 
 function requireRouter(router) {
   if (!router || typeof router.execute !== 'function') throw new Error('Semantic embedding requires a model router');
@@ -75,6 +80,9 @@ function normalizeKinds(kinds) {
     normalized.push(kind);
   }
   return [...new Set(normalized)].sort();
+}
+function rejectUnknownFields(value, allowedKeys, label) {
+  for (const key of Object.keys(value)) if (!allowedKeys.has(key)) throw new Error(`Unsupported ${label} field: ${key}`);
 }
 function embeddingText(document) {
   const terms = Object.keys(document.terms ?? {}).slice(0, 256).join(' ');
@@ -157,39 +165,49 @@ export function assertSemanticEmbeddingIndex(index, options = {}) {
   if (projectId != null) requireString(projectId, 'Expected semantic embedding projectId');
   if (sourceFingerprint != null) requireString(sourceFingerprint, 'Expected semantic embedding source fingerprint');
   if (backendId != null) requireString(backendId, 'Expected semantic embedding backend id');
-  if (!index || typeof index !== 'object' || Array.isArray(index) || index.schema !== SEMANTIC_EMBEDDING_INDEX_SCHEMA) throw new Error('A valid semantic embedding index is required');
-  requireString(index.projectId, 'Semantic embedding index projectId');
-  requireString(index.sourceFingerprint, 'Semantic embedding index source fingerprint');
-  if (index.backendId != null) requireString(index.backendId, 'Semantic embedding index backend id');
-  if (projectId != null && index.projectId !== projectId) throw new Error('Semantic embedding index projectId does not match expected project');
-  if (sourceFingerprint != null && index.sourceFingerprint !== sourceFingerprint) throw new Error('Semantic embedding index source fingerprint does not match expected source');
-  if (backendId != null && index.backendId !== backendId) throw new Error('Semantic embedding index backend id does not match expected backend');
-  if (!Number.isSafeInteger(index.dimensions) || index.dimensions < 0 || index.dimensions > MAX_SEMANTIC_EMBEDDING_DIMENSIONS) throw new Error('Semantic embedding index dimensions are invalid');
-  if (!Array.isArray(index.documents) || index.documents.length > MAX_SEMANTIC_EMBEDDING_DOCUMENTS) throw new Error('Semantic embedding index documents are invalid');
-  if (index.documents.length && (!index.dimensions || !index.backendId)) throw new Error('Semantic embedding index with documents requires dimensions and backend id');
-  if (index.documents.length * index.dimensions > MAX_SEMANTIC_EMBEDDING_SCALARS) throw new Error(`Semantic embedding index exceeds ${MAX_SEMANTIC_EMBEDDING_SCALARS} scalar values`);
+  const safe = normalizeBoundedModelInput(index, 'Semantic embedding index', {
+    maxBytes: MAX_EMBEDDING_INDEX_BYTES,
+    maxEntries: MAX_EMBEDDING_INDEX_ENTRIES,
+    maxDepth: 6,
+    allowBinary: true,
+  });
+  if (!safe || typeof safe !== 'object' || Array.isArray(safe) || safe.schema !== SEMANTIC_EMBEDDING_INDEX_SCHEMA) throw new Error('A valid semantic embedding index is required');
+  rejectUnknownFields(safe, EMBEDDING_INDEX_KEYS, 'semantic embedding index');
+  requireString(safe.projectId, 'Semantic embedding index projectId');
+  requireString(safe.sourceFingerprint, 'Semantic embedding index source fingerprint');
+  if (safe.backendId != null) requireString(safe.backendId, 'Semantic embedding index backend id');
+  if (projectId != null && safe.projectId !== projectId) throw new Error('Semantic embedding index projectId does not match expected project');
+  if (sourceFingerprint != null && safe.sourceFingerprint !== sourceFingerprint) throw new Error('Semantic embedding index source fingerprint does not match expected source');
+  if (backendId != null && safe.backendId !== backendId) throw new Error('Semantic embedding index backend id does not match expected backend');
+  if (!Number.isSafeInteger(safe.dimensions) || safe.dimensions < 0 || safe.dimensions > MAX_SEMANTIC_EMBEDDING_DIMENSIONS) throw new Error('Semantic embedding index dimensions are invalid');
+  if (!Array.isArray(safe.documents) || safe.documents.length > MAX_SEMANTIC_EMBEDDING_DOCUMENTS) throw new Error('Semantic embedding index documents are invalid');
+  if (safe.documents.length && (!safe.dimensions || !safe.backendId)) throw new Error('Semantic embedding index with documents requires dimensions and backend id');
+  if (safe.documents.length * safe.dimensions > MAX_SEMANTIC_EMBEDDING_SCALARS) throw new Error(`Semantic embedding index exceeds ${MAX_SEMANTIC_EMBEDDING_SCALARS} scalar values`);
   const ids = new Set();
-  for (const document of index.documents) {
+  for (const document of safe.documents) {
     if (!document || typeof document !== 'object' || Array.isArray(document)) throw new Error('Semantic embedding document must be an object');
+    rejectUnknownFields(document, EMBEDDING_DOCUMENT_KEYS, 'semantic embedding document');
     const id = requireString(document.id, 'Semantic embedding document id');
     if (ids.has(id)) throw new Error(`Semantic embedding document id is duplicated: ${id}`);
     ids.add(id);
     requireString(document.kind, 'Semantic embedding document kind');
     if (typeof document.name !== 'string') throw new Error('Semantic embedding document name must be a string');
-    validateVector(document.vector, index.dimensions);
+    document.vector = validateVector(document.vector, safe.dimensions);
   }
-  if (index.routing !== undefined) {
-    if (!Array.isArray(index.routing)) throw new Error('Semantic embedding routing must be an array');
+  if (safe.routing !== undefined) {
+    if (!Array.isArray(safe.routing) || safe.routing.length > MAX_SEMANTIC_EMBEDDING_DOCUMENTS) throw new Error('Semantic embedding routing must be a bounded array');
     let routedDocuments = 0;
-    for (const route of index.routing) {
-      const routeBackendId = requireString(route?.backendId, 'Semantic embedding routing backend id');
-      if (index.backendId && routeBackendId !== index.backendId) throw new Error('Semantic embedding routing backend does not match index backend');
-      if (!Number.isSafeInteger(route?.count) || route.count < 1) throw new Error('Semantic embedding routing count must be a positive safe integer');
+    for (const route of safe.routing) {
+      if (!route || typeof route !== 'object' || Array.isArray(route)) throw new Error('Semantic embedding routing entry must be an object');
+      rejectUnknownFields(route, EMBEDDING_ROUTE_KEYS, 'semantic embedding routing');
+      const routeBackendId = requireString(route.backendId, 'Semantic embedding routing backend id');
+      if (safe.backendId && routeBackendId !== safe.backendId) throw new Error('Semantic embedding routing backend does not match index backend');
+      if (!Number.isSafeInteger(route.count) || route.count < 1) throw new Error('Semantic embedding routing count must be a positive safe integer');
       routedDocuments += route.count;
     }
-    if (routedDocuments !== index.documents.length) throw new Error('Semantic embedding routing counts do not match index documents');
+    if (routedDocuments !== safe.documents.length) throw new Error('Semantic embedding routing counts do not match index documents');
   }
-  return index;
+  return safe;
 }
 
 export async function createSemanticEmbeddingIndex(graph, router, options = {}) {
@@ -234,17 +252,17 @@ export async function createSemanticEmbeddingIndex(graph, router, options = {}) 
 }
 
 export function searchSemanticEmbeddingIndex(index, queryVector, options = {}) {
-  assertSemanticEmbeddingIndex(index);
+  const safeIndex = assertSemanticEmbeddingIndex(index);
   const config = dataOptions(options, 'Semantic embedding search options', SEARCH_OPTION_KEYS);
-  if (!index.dimensions) return [];
-  const query = validateVector(queryVector, index.dimensions);
+  if (!safeIndex.dimensions) return [];
+  const query = validateVector(queryVector, safeIndex.dimensions);
   const normalizedKinds = normalizeKinds(config.kinds ?? null);
   const allowed = normalizedKinds == null ? null : new Set(normalizedKinds);
   const maxResults = boundedInteger(config.limit, 'Semantic embedding search limit', 20, MAX_SEMANTIC_SEARCH_RESULTS);
   const threshold = finiteNumber(config.minimumScore, 'Semantic embedding minimumScore', -1, -1, 1);
-  return index.documents
+  return safeIndex.documents
     .filter((document) => !allowed || allowed.has(document.kind))
-    .map((document) => ({ id: document.id, kind: document.kind, name: document.name, score: cosine(query, validateVector(document.vector, index.dimensions)) }))
+    .map((document) => ({ id: document.id, kind: document.kind, name: document.name, score: cosine(query, document.vector) }))
     .filter((result) => result.score >= threshold)
     .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name) || a.id.localeCompare(b.id))
     .slice(0, maxResults);
@@ -252,7 +270,7 @@ export function searchSemanticEmbeddingIndex(index, queryVector, options = {}) {
 
 export async function embedSemanticQuery(router, index, query, options = {}) {
   requireRouter(router);
-  assertSemanticEmbeddingIndex(index);
+  const safeIndex = assertSemanticEmbeddingIndex(index);
   const config = dataOptions(options, 'Semantic embedding query options', QUERY_OPTION_KEYS);
   if (typeof query !== 'string') throw new Error('Semantic embedding query must be a string');
   if (query.length > MAX_SEMANTIC_QUERY_CHARS) throw new Error(`Semantic embedding query exceeds ${MAX_SEMANTIC_QUERY_CHARS} characters`);
@@ -263,13 +281,13 @@ export async function embedSemanticQuery(router, index, query, options = {}) {
   const kinds = normalizeKinds(config.kinds ?? null);
   const minimumScore = finiteNumber(config.minimumScore, 'Semantic embedding query minimumScore', -1, -1, 1);
   const callerAllowed = cleanPolicy.allowedBackendIds == null ? null : new Set(cleanPolicy.allowedBackendIds);
-  const queryPolicy = index.backendId
-    ? { ...cleanPolicy, allowedBackendIds: callerAllowed == null || callerAllowed.has(index.backendId) ? [index.backendId] : [] }
+  const queryPolicy = safeIndex.backendId
+    ? { ...cleanPolicy, allowedBackendIds: callerAllowed == null || callerAllowed.has(safeIndex.backendId) ? [safeIndex.backendId] : [] }
     : cleanPolicy;
-  const routed = await router.execute('embed', { texts: [query.trim()] }, { signal, policy: queryPolicy, context: { purpose: 'semantic-query', projectId: index.projectId } });
-  if (index.backendId && routed.backendId !== index.backendId) throw new Error(`Semantic query backend ${routed.backendId} does not match index backend ${index.backendId}`);
-  const normalized = normalizeEmbedOutput(routed.output, 1, index.dimensions);
-  return searchSemanticEmbeddingIndex(index, normalized.vectors[0], { limit, kinds, minimumScore }).map((result) => ({ ...result, backendId: routed.backendId }));
+  const routed = await router.execute('embed', { texts: [query.trim()] }, { signal, policy: queryPolicy, context: { purpose: 'semantic-query', projectId: safeIndex.projectId } });
+  if (safeIndex.backendId && routed.backendId !== safeIndex.backendId) throw new Error(`Semantic query backend ${routed.backendId} does not match index backend ${safeIndex.backendId}`);
+  const normalized = normalizeEmbedOutput(routed.output, 1, safeIndex.dimensions);
+  return searchSemanticEmbeddingIndex(safeIndex, normalized.vectors[0], { limit, kinds, minimumScore }).map((result) => ({ ...result, backendId: routed.backendId }));
 }
 
 export function searchSemanticHybrid(graph, embeddingIndex, query, queryVector, options = {}) {

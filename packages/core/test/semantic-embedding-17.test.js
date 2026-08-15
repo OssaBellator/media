@@ -6,6 +6,7 @@ import { createCreativeObjectOperations } from '../src/creative-object.js';
 import { ModelRouter } from '../src/model-router.js';
 import {
   MAX_SEMANTIC_EMBEDDING_SCALARS,
+  assertSemanticEmbeddingIndex,
   createSemanticEmbeddingIndex,
   embedSemanticQuery,
   searchSemanticEmbeddingIndex,
@@ -181,4 +182,36 @@ test('semantic embedding query validates options and text before model routing',
   await assert.rejects(() => embedSemanticQuery(router, index, 'x'.repeat(MAX_SEMANTIC_QUERY_CHARS + 1)), /query exceeds 4096 characters/);
   await assert.rejects(() => embedSemanticQuery(router, index, 'Film', { limit: '1' }), /query limit must be an integer/);
   assert.equal(backendCalls, 0);
+});
+
+test('semantic embedding index validation rejects accessors without executing them', async () => {
+  const graph = createGraph('Film');
+  const valid = await createSemanticEmbeddingIndex(graph, embedRouter(), { maxDocuments: 1 });
+
+  let rootGetterCalls = 0;
+  const root = { ...valid };
+  Object.defineProperty(root, 'documents', { enumerable: true, get() { rootGetterCalls += 1; return valid.documents; } });
+  assert.throws(() => assertSemanticEmbeddingIndex(root), /Semantic embedding index objects must contain enumerable data properties only/);
+  assert.equal(rootGetterCalls, 0);
+
+  let vectorGetterCalls = 0;
+  const document = { ...valid.documents[0] };
+  Object.defineProperty(document, 'vector', { enumerable: true, get() { vectorGetterCalls += 1; return valid.documents[0].vector; } });
+  assert.throws(() => assertSemanticEmbeddingIndex({ ...valid, documents: [document] }), /Semantic embedding index objects must contain enumerable data properties only/);
+  assert.equal(vectorGetterCalls, 0);
+});
+
+test('semantic embedding index validation returns an inert detached clone with strict fields', async () => {
+  const graph = createGraph('Film');
+  const index = await createSemanticEmbeddingIndex(graph, embedRouter(), { maxDocuments: 1 });
+  const safe = assertSemanticEmbeddingIndex(index);
+  assert.notEqual(safe, index);
+  assert.notEqual(safe.documents, index.documents);
+  assert.notEqual(safe.documents[0].vector, index.documents[0].vector);
+  const original = safe.documents[0].vector[0];
+  index.documents[0].vector[0] = original + 10;
+  assert.equal(safe.documents[0].vector[0], original);
+  assert.throws(() => assertSemanticEmbeddingIndex({ ...index, unexpected: true }), /Unsupported semantic embedding index field: unexpected/);
+  assert.throws(() => assertSemanticEmbeddingIndex({ ...index, documents: [{ ...index.documents[0], unexpected: true }] }), /Unsupported semantic embedding document field: unexpected/);
+  assert.throws(() => assertSemanticEmbeddingIndex({ ...index, routing: [{ backendId: index.backendId, count: 1, unexpected: true }] }), /Unsupported semantic embedding routing field: unexpected/);
 });

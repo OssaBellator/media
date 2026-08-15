@@ -42,3 +42,20 @@ test('derived-cache read or write failures do not block embedding functionality'
   const readFail=new SemanticEmbeddingCache({router:router(counter),load:async()=>{throw new Error('idb read');},save:async()=>true,remove:async()=>true});const a=await readFail.getOrCreate(graph);assert.equal(a.cached,false);assert.match(a.cacheReadError.message,/idb read/);
   const writeFail=new SemanticEmbeddingCache({router:router(counter),load:async()=>null,save:async()=>{throw new Error('quota');},remove:async()=>true});const b=await writeFail.getOrCreate(graph);assert.equal(b.cached,false);assert.match(b.cacheWriteError.message,/quota/);
 });
+
+test('cache rejects getter-bearing stored values without executing them and rebuilds safely',async()=>{
+  let graph=createGraph('Film');graph=applyOperations(graph,createCreativeObjectOperations(graph,{name:'Maya',objectType:'person'}));
+  const records=new Map(),counter={count:0};let removed=0,getterCalls=0;
+  const cache=new SemanticEmbeddingCache({router:router(counter),load:async k=>records.get(k)??null,save:async(k,v)=>{records.set(k,{value:v});return true;},remove:async k=>{removed+=1;return records.delete(k);}});
+  const first=await cache.getOrCreate(graph,{kinds:['object']});
+  const forged={};Object.defineProperty(forged,'value',{enumerable:true,get(){getterCalls+=1;return first.index;}});records.set(first.key,forged);
+  const rebuilt=await cache.getOrCreate(graph,{kinds:['object']});
+  assert.equal(getterCalls,0);assert.equal(removed,1);assert.equal(rebuilt.cached,false);assert.notEqual(rebuilt.index,first.index);
+});
+
+test('cache returns the detached normalized index instead of the loaded object',async()=>{
+  let graph=createGraph('Film');graph=applyOperations(graph,createCreativeObjectOperations(graph,{name:'Maya',objectType:'person'}));
+  const records=new Map(),counter={count:0};const cache=new SemanticEmbeddingCache({router:router(counter),load:async k=>records.get(k)??null,save:async(k,v)=>{records.set(k,{value:v});return true;},remove:async k=>records.delete(k)});
+  const first=await cache.getOrCreate(graph,{kinds:['object']});const stored=records.get(first.key).value;const second=await cache.getOrCreate(graph,{kinds:['object']});
+  assert.equal(second.cached,true);assert.notEqual(second.index,stored);assert.notEqual(second.index.documents,stored.documents);assert.deepEqual(second.index,stored);
+});

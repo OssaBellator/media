@@ -30,6 +30,14 @@ function sameKinds(left, right) {
   }
 }
 
+function storedArtifactValue(stored) {
+  if (!stored || typeof stored !== 'object' || Array.isArray(stored)) return stored;
+  if (!Object.hasOwn(stored, 'value')) return stored;
+  const descriptor = Object.getOwnPropertyDescriptor(stored, 'value');
+  if (!descriptor?.enumerable || !Object.hasOwn(descriptor, 'value')) throw new Error('Semantic embedding cache record value must be an enumerable data property');
+  return descriptor.value;
+}
+
 export class SemanticEmbeddingCache {
   constructor({ router, load = loadDerivedArtifact, save = saveDerivedArtifact, remove = deleteDerivedArtifact, list = listDerivedArtifacts } = {}) {
     if (!router || typeof router.execute !== 'function' || typeof router.list !== 'function') throw new Error('Semantic embedding cache requires a model router');
@@ -63,11 +71,11 @@ export class SemanticEmbeddingCache {
       try { stored = await this.load(key); }
       catch (error) { cacheReadError ??= error; break; }
       if (!stored) continue;
-      const value = stored.value ?? stored;
       try {
-        assertSemanticEmbeddingIndex(value, { projectId: graph.projectId, sourceFingerprint, backendId: backend.id });
+        const value = storedArtifactValue(stored);
+        const index = assertSemanticEmbeddingIndex(value, { projectId: graph.projectId, sourceFingerprint, backendId: backend.id });
         const pruning = await this.#pruneCurrentOnce(graph, normalizedKinds, sourceFingerprint);
-        return { index: value, key, cached: true, cacheReadError: null, cacheWriteError: null, ...pruning };
+        return { index, key, cached: true, cacheReadError: null, cacheWriteError: null, ...pruning };
       } catch {
         try { await this.remove(key); } catch {}
       }
