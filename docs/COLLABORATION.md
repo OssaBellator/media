@@ -46,6 +46,14 @@ For authenticated stale/forked input, the coordinator runs the existing determin
 
 The coordinator intentionally defines no socket, HTTP route or account session. A future transport adapter should parse bounded envelopes, call this single ingress method, and serialize the returned `applied`, `rebase-safe`, `conflict`, `different-base` or `different-history` result without acquiring independent mutation authority.
 
+## Bounded collaboration wire protocol
+
+`packages/core/src/collaboration-wire.js` defines `media.collaboration-wire.v1` as a deterministic byte-envelope around the coordinator. The initial request type is `batch.submit`; it carries a bounded request ID and one already-signed `media.operation-batch.v1`. The parser accepts only UTF-8 JSON, rejects unknown top-level fields, applies a configurable request-byte ceiling and validates the signed batch structure before any submit callback is invoked.
+
+`submitCollaborationWirePayload()` turns a coordinator-style submit function into a transport result with an HTTP-compatible status code plus canonical JSON bytes. Successful responses expose the result status, current log head and bounded conflict coordinates/resources, but deliberately strip the original operation bodies from conflict diagnostics. Authentication failures return a generic rejection, replay-policy failures map separately, and unknown application/persistence errors are left to the hosting transport rather than being mislabeled as client errors.
+
+The wire module still opens no socket. HTTP and WebSocket servers should be thin adapters around these bytes and the single `CollaborationCoordinatorSession.submit()` ingress path.
+
 ## Deliberate boundary
 
 This is not yet a complete collaboration protocol. Media does **not** yet define network transport, account/session authentication, authenticated administrative enrollment UI, presence, permissions or server persistence. Key distribution/rotation and account authorization remain deployment responsibilities.
