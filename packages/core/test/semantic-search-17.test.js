@@ -3,7 +3,7 @@ import test from 'node:test';
 import { createGraph, createNode } from '../src/graph.js';
 import { applyOperations } from '../src/operations.js';
 import { createCreativeObjectOperations, linkCreativeObjectOperations } from '../src/creative-object.js';
-import { MAX_SEMANTIC_QUERY_CHARS, createSemanticIndex, searchSemanticGraph, searchSemanticIndex } from '../src/semantic-search.js';
+import { MAX_SEMANTIC_QUERY_CHARS, MAX_SEMANTIC_QUERY_TERMS, assertSemanticIndex, createSemanticIndex, searchSemanticGraph, searchSemanticIndex } from '../src/semantic-search.js';
 
 test('semantic search ranks names object types tags and semantic attributes deterministically', () => {
   let graph = createGraph('Launch campaign');
@@ -89,4 +89,53 @@ test('semantic kind filters require bounded dense string values without coercion
   kinds.length = 1;
   assert.throws(() => searchSemanticGraph(graph, 'Campaign', { kinds }), /Semantic kinds must contain enumerable data values only/);
   assert.equal(getterCalls, 0);
+});
+
+test('reusable semantic indexes reject accessors without executing them', () => {
+  const index = createSemanticIndex(createGraph('Campaign'));
+  let rootGetterCalls = 0;
+  const root = { schema: index.schema, projectId: index.projectId };
+  Object.defineProperty(root, 'documents', { enumerable: true, get() { rootGetterCalls += 1; return index.documents; } });
+  assert.throws(() => searchSemanticIndex(root, 'Campaign'), /Semantic index objects must contain enumerable data properties only/);
+  assert.equal(rootGetterCalls, 0);
+
+  let termGetterCalls = 0;
+  const document = structuredClone(index.documents[0]);
+  Object.defineProperty(document.terms, 'campaign', { enumerable: true, get() { termGetterCalls += 1; return 10; } });
+  assert.throws(() => searchSemanticIndex({ schema: index.schema, projectId: index.projectId, documents: [document] }, 'Campaign'), /Semantic index objects must contain enumerable data properties only/);
+  assert.equal(termGetterCalls, 0);
+});
+
+test('semantic index normalization returns a detached frozen strict contract', () => {
+  const created = createSemanticIndex(createGraph('Campaign'));
+  assert.equal(assertSemanticIndex(created), created);
+  assert.equal(Object.isFrozen(created), true);
+  assert.equal(Object.isFrozen(created.documents), true);
+  assert.equal(Object.isFrozen(created.documents[0].terms), true);
+
+  const external = structuredClone(created);
+  const safe = assertSemanticIndex(external);
+  assert.notEqual(safe, external);
+  assert.deepEqual(safe, external);
+  assert.equal(Object.isFrozen(safe.documents[0]), true);
+  external.documents[0].name = 'Changed';
+  assert.notEqual(safe.documents[0].name, external.documents[0].name);
+  assert.throws(() => assertSemanticIndex({ ...external, unexpected: true }), /Unsupported semantic index field: unexpected/);
+  assert.throws(() => assertSemanticIndex({ ...external, documents: [{ ...external.documents[0], unexpected: true }] }), /Unsupported semantic index document field: unexpected/);
+});
+
+test('semantic queries have a hard unique-term ceiling before index scanning', () => {
+  const index = createSemanticIndex(createGraph('Campaign'));
+  const query = Array.from({ length: MAX_SEMANTIC_QUERY_TERMS + 1 }, (_, item) => `term${item}`).join(' ');
+  assert.throws(() => searchSemanticIndex(index, query), /Semantic query exceeds 128 unique terms/);
+});
+
+test('semantic index rejects forged weights and unbounded source evidence', () => {
+  const created = structuredClone(createSemanticIndex(createGraph('Campaign')));
+  created.documents[0].terms.campaign = '10';
+  assert.throws(() => assertSemanticIndex(created), /term weight must be a finite number/);
+
+  const sourceHeavy = structuredClone(createSemanticIndex(createGraph('Campaign')));
+  sourceHeavy.documents[0].sources.campaign = Array.from({ length: 2049 }, () => 'name');
+  assert.throws(() => assertSemanticIndex(sourceHeavy), /exceeds 2048 source references/);
 });

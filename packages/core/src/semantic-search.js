@@ -1,4 +1,5 @@
 import { edgesFrom, edgesTo } from './graph.js';
+import { normalizeBoundedModelInput } from './model-input.js';
 
 export const SEMANTIC_INDEX_SCHEMA = 'media.semantic-index.v1';
 export const MAX_SEMANTIC_QUERY_CHARS = 4096;
@@ -6,10 +7,17 @@ export const MAX_SEMANTIC_KIND_FILTERS = 64;
 export const MAX_SEMANTIC_KIND_CHARS = 64;
 export const MAX_SEMANTIC_SEARCH_RESULTS = 200;
 export const MAX_SEMANTIC_TERMS_PER_NODE = 2048;
+export const MAX_SEMANTIC_QUERY_TERMS = 128;
+export const MAX_SEMANTIC_INDEX_DOCUMENTS = 65536;
+const MAX_SEMANTIC_INDEX_BYTES = 64 * 1024 * 1024;
+const MAX_SEMANTIC_INDEX_ENTRIES = 4_000_000;
 const DEFAULT_MAX_TERMS_PER_NODE = 256;
 const SEMANTIC_INDEX_OPTION_KEYS = new Set(['kinds', 'maxTermsPerNode']);
 const SEMANTIC_SEARCH_OPTION_KEYS = new Set(['limit', 'kinds', 'minimumScore']);
 const SEMANTIC_GRAPH_SEARCH_OPTION_KEYS = new Set(['limit', 'kinds', 'minimumScore', 'maxTermsPerNode']);
+const SEMANTIC_INDEX_KEYS = new Set(['schema', 'projectId', 'documents']);
+const SEMANTIC_DOCUMENT_KEYS = new Set(['id', 'kind', 'name', 'normalizedName', 'terms', 'sources']);
+const trustedSemanticIndexes = new WeakSet();
 
 function dataConfig(value, label, allowedKeys) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${label} must be a plain data object`);
@@ -49,6 +57,61 @@ function normalizedQuery(query) {
   if (typeof query !== 'string') throw new Error('Semantic query must be a string');
   if (query.length > MAX_SEMANTIC_QUERY_CHARS) throw new Error(`Semantic query exceeds ${MAX_SEMANTIC_QUERY_CHARS} characters`);
   return query.normalize('NFKC').toLowerCase().trim();
+}
+function rejectUnknownFields(value, allowedKeys, label) {
+  for (const key of Object.keys(value)) if (!allowedKeys.has(key)) throw new Error(`Unsupported ${label} field: ${key}`);
+}
+function freezeSemanticIndex(index) {
+  for (const document of index.documents) {
+    for (const values of Object.values(document.sources)) Object.freeze(values);
+    Object.freeze(document.sources);
+    Object.freeze(document.terms);
+    Object.freeze(document);
+  }
+  Object.freeze(index.documents);
+  Object.freeze(index);
+  trustedSemanticIndexes.add(index);
+  return index;
+}
+export function assertSemanticIndex(index) {
+  if (trustedSemanticIndexes.has(index)) return index;
+  const safe = normalizeBoundedModelInput(index, 'Semantic index', {
+    maxBytes: MAX_SEMANTIC_INDEX_BYTES,
+    maxEntries: MAX_SEMANTIC_INDEX_ENTRIES,
+    maxDepth: 6,
+    allowBinary: false,
+  });
+  if (!safe || typeof safe !== 'object' || Array.isArray(safe) || safe.schema !== SEMANTIC_INDEX_SCHEMA) throw new Error('A valid semantic index is required');
+  rejectUnknownFields(safe, SEMANTIC_INDEX_KEYS, 'semantic index');
+  if (typeof safe.projectId !== 'string' || !safe.projectId) throw new Error('Semantic index projectId must be a non-empty string');
+  if (!Array.isArray(safe.documents) || safe.documents.length > MAX_SEMANTIC_INDEX_DOCUMENTS) throw new Error(`Semantic index documents must be an array with at most ${MAX_SEMANTIC_INDEX_DOCUMENTS} entries`);
+  const ids = new Set();
+  for (const document of safe.documents) {
+    if (!document || typeof document !== 'object' || Array.isArray(document)) throw new Error('Semantic index document must be an object');
+    rejectUnknownFields(document, SEMANTIC_DOCUMENT_KEYS, 'semantic index document');
+    for (const field of ['id', 'kind', 'name', 'normalizedName']) if (typeof document[field] !== 'string') throw new Error(`Semantic index document ${field} must be a string`);
+    if (!document.id) throw new Error('Semantic index document id must be non-empty');
+    if (ids.has(document.id)) throw new Error(`Semantic index document id is duplicated: ${document.id}`);
+    ids.add(document.id);
+    if (!document.terms || typeof document.terms !== 'object' || Array.isArray(document.terms)) throw new Error('Semantic index document terms must be an object');
+    if (!document.sources || typeof document.sources !== 'object' || Array.isArray(document.sources)) throw new Error('Semantic index document sources must be an object');
+    const termKeys = Object.keys(document.terms);
+    if (termKeys.length > MAX_SEMANTIC_TERMS_PER_NODE) throw new Error(`Semantic index document exceeds ${MAX_SEMANTIC_TERMS_PER_NODE} terms`);
+    const terms = new Set(termKeys);
+    for (const term of termKeys) {
+      const weight = document.terms[term];
+      if (typeof weight !== 'number' || !Number.isFinite(weight) || weight <= 0 || weight > 100) throw new Error('Semantic index term weight must be a finite number between 0 and 100');
+    }
+    let sourceCount = 0;
+    for (const [term, values] of Object.entries(document.sources)) {
+      if (!terms.has(term)) throw new Error(`Semantic index sources reference unknown term: ${term}`);
+      if (!Array.isArray(values)) throw new Error('Semantic index term sources must be arrays');
+      sourceCount += values.length;
+      if (sourceCount > MAX_SEMANTIC_TERMS_PER_NODE) throw new Error(`Semantic index document exceeds ${MAX_SEMANTIC_TERMS_PER_NODE} source references`);
+      for (const value of values) if (typeof value !== 'string') throw new Error('Semantic index term source must be a string');
+    }
+  }
+  return freezeSemanticIndex(safe);
 }
 
 function normalize(value) {
@@ -131,17 +194,20 @@ export function createSemanticIndex(graph, options = {}) {
   const allowed = normalizedKinds == null ? null : new Set(normalizedKinds);
   const maxTerms = boundedInteger(config.maxTermsPerNode, 'Semantic maxTermsPerNode', DEFAULT_MAX_TERMS_PER_NODE, 16, MAX_SEMANTIC_TERMS_PER_NODE);
   const documents = Object.values(graph?.nodes ?? {})
-    .filter((node) => !allowed || allowed.has(node.kind))
+    .filter((node) => !allowed || allowed.has(node.kind));
+  if (documents.length > MAX_SEMANTIC_INDEX_DOCUMENTS) throw new Error(`Semantic index exceeds ${MAX_SEMANTIC_INDEX_DOCUMENTS} documents`);
+  const indexed = documents
     .map((node) => documentForNode(graph, node, maxTerms))
     .sort((a, b) => a.id.localeCompare(b.id));
-  return { schema: SEMANTIC_INDEX_SCHEMA, projectId: graph.projectId, documents };
+  return freezeSemanticIndex({ schema: SEMANTIC_INDEX_SCHEMA, projectId: graph.projectId, documents: indexed });
 }
 
 export function searchSemanticIndex(index, query, options = {}) {
-  if (!index || index.schema !== SEMANTIC_INDEX_SCHEMA || !Array.isArray(index.documents)) throw new Error('A valid semantic index is required');
+  const safeIndex = assertSemanticIndex(index);
   const config = dataConfig(options, 'Semantic search options', SEMANTIC_SEARCH_OPTION_KEYS);
   const queryText = normalizedQuery(query);
   const queryTerms = [...new Set(tokens(queryText))];
+  if (queryTerms.length > MAX_SEMANTIC_QUERY_TERMS) throw new Error(`Semantic query exceeds ${MAX_SEMANTIC_QUERY_TERMS} unique terms`);
   if (!queryTerms.length) return [];
   const normalizedKinds = normalizeKinds(config.kinds ?? null);
   const allowed = normalizedKinds == null ? null : new Set(normalizedKinds);
@@ -149,7 +215,7 @@ export function searchSemanticIndex(index, query, options = {}) {
   const threshold = config.minimumScore === undefined ? 1 : config.minimumScore;
   if (typeof threshold !== 'number' || !Number.isFinite(threshold) || threshold < 0) throw new Error('Semantic minimumScore must be a finite non-negative number');
   const results = [];
-  for (const document of index.documents) {
+  for (const document of safeIndex.documents) {
     if (allowed && !allowed.has(document.kind)) continue;
     let score = 0;
     const matchedTerms = [];
