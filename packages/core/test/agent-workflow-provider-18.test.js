@@ -10,6 +10,7 @@ import {
   assertWorkflowPlannerResult,
   createModelRouterWorkflowProvider,
   createWorkflowPlannerProvider,
+  MAX_PLANNER_INTENT_CHARS,
   proposeAgentWorkflowWithProvider,
 } from '../src/providers.js';
 
@@ -34,6 +35,14 @@ test('workflow provider produces a graph-bound Agent workflow without putting ta
   assertAgentPlanMatchesGraph(graph, workflow.plan);
   assert.equal(workflow.plan.metadata.workflowPlanner.requestClass, 'semantic');
   assert.equal(JSON.stringify(workflow.plan.metadata).includes('semantic-enrichment'), false);
+});
+
+test('workflow provider bounds intent before provider invocation', async () => {
+  const graph = createGraph('Workflow intent bound');
+  let calls = 0;
+  const provider = createWorkflowPlannerProvider({ id: 'intent-bound', proposeWorkflow: async () => { calls += 1; return { summary: 'noop', operations: [], tasks: [] }; } });
+  await assert.rejects(() => proposeAgentWorkflowWithProvider(provider, graph, 'x'.repeat(MAX_PLANNER_INTENT_CHARS + 1)), /exceeds 16384 characters/);
+  assert.equal(calls, 0);
 });
 
 test('workflow provider rejects invalid task semantics and DAG dependencies before execution', async () => {

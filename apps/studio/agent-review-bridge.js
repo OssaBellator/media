@@ -1,6 +1,6 @@
 import { createAgentPlan } from '../../packages/core/src/agent-plan.js';
 import { assertAgentWorkflow } from '../../packages/core/src/agent-workflow.js';
-import { createModelRouterWorkflowProvider, proposeAgentWorkflowWithProvider } from '../../packages/core/src/providers.js';
+import { createModelRouterWorkflowProvider, MAX_PLANNER_INTENT_CHARS, proposeAgentWorkflowWithProvider } from '../../packages/core/src/providers.js';
 import { AgentDelegationSession } from './agent-delegation-session.js';
 import { AgentProposalSession } from './agent-proposal-session.js';
 import { StudioAgentController } from './agent-controller.js';
@@ -9,7 +9,7 @@ import { AgentWorkflowSession } from './agent-workflow-session.js';
 import { HistoryJournalSession } from './history-journal-session.js';
 import { getStudioModelRouter } from './studio-services.js';
 
-export const MAX_STUDIO_WORKFLOW_INTENT_CHARS = 16_384;
+export const MAX_STUDIO_WORKFLOW_INTENT_CHARS = MAX_PLANNER_INTENT_CHARS;
 const MAX_STUDIO_DELEGATION_STATUS_CHARS = 512;
 
 const sessionRecords = new WeakMap();

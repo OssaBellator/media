@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  MAX_PLANNER_INTENT_CHARS,
   PlannerRegistry,
   createHttpPlannerProvider,
   createLocalPlannerProvider,
@@ -49,6 +50,16 @@ test("local planner provider exposes the deterministic planner asynchronously", 
 test("provider result validation rejects arbitrary model output", async () => {
   const provider = createPlannerProvider({ id: "bad", plan: async () => ({ summary: "bad", operations: [{ type: "shell.exec", command: "rm" }] }) });
   await assert.rejects(() => planWithProvider(provider, createMediaProject(), "do something"), /Unsupported operation/);
+});
+
+test("planner intent is normalized and bounded before provider invocation", async () => {
+  let calls = 0;
+  let receivedIntent = null;
+  const provider = createPlannerProvider({ id: "intent-bound", plan: async ({ intent }) => { calls += 1; receivedIntent = intent; return { summary: "noop", operations: [] }; } });
+  await planWithProvider(provider, createMediaProject(), "  bounded intent  ");
+  assert.equal(receivedIntent, "bounded intent");
+  await assert.rejects(() => planWithProvider(provider, createMediaProject(), "x".repeat(MAX_PLANNER_INTENT_CHARS + 1)), /exceeds 16384 characters/);
+  assert.equal(calls, 1);
 });
 
 test("planner registry keeps providers replaceable and discoverable", () => {
