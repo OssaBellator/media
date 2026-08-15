@@ -36,8 +36,10 @@ Completion attestations bind the same actor/key to the active chunk attempt plus
 
 Only then does the existing `completeRenderChunk()` transition run. Release, retry and interrupted-recovery paths clear `workerId`, `workerKeyId` and claim-attestation state together so stale authenticated ownership cannot survive a reset.
 
-The artifact verifier and nonce/key services are intentionally injected. Core does not pretend that signing a descriptor proves remote bytes were uploaded correctly, nor does it define a deployment PKI or replay database.
+The artifact verifier is intentionally injected. `media.trust-registry.v1` can supply the worker signature/replay policy through `renderWorkerTrustVerifier(session)`, including render-worker purpose scope, key validity/revocation, freshness and durable nonce consumption. The registry stores verification descriptors rather than private signing material.
+
+For coordinators that must commit replay state with render-job state atomically, `prepareTrustedMessageVerification()` returns a verified proposed registry without persisting it; the coordinator can commit that registry beside the accepted claim/completion transition in one application transaction.
 
 ## Boundary
 
-The final assembly index is intentionally independent of storage implementation so native/cloud renderers can use the same job state and byte/time segment contract. A production distributed renderer still needs coordinator/network transport, durable nonce/replay state, key enrollment/revocation, artifact storage and scheduler policy.
+The final assembly index is intentionally independent of storage implementation so native/cloud renderers can use the same job state and byte/time segment contract. A production distributed renderer still needs coordinator/network transport, artifact upload/storage, administrative key enrollment/account authorization, scheduler policy and coordinator/application atomic persistence.

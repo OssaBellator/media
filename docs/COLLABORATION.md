@@ -27,11 +27,19 @@ The signature covers the full canonical transaction bytes. Recomputing Media's l
 
 This gives collaboration a deterministic authenticated ingestion boundary without weakening crash-recovery semantics.
 
+## Shared trust registry
+
+`media.trust-registry.v1` adds the persistent actor/key/replay policy used by collaboration and distributed rendering. Keys have explicit purpose scopes, validity windows and monotonic revocation. `TrustRegistrySession` verifies a signature before consuming its nonce and persists the next registry revision before returning success; concurrent duplicate nonces serialize so only one can be accepted.
+
+`operationBatchTrustVerifier(session)` plugs directly into the existing operation-batch `verifySignature` callback without changing signed bytes. Studio's `media-studio-trust` IndexedDB store persists registry revisions with compare-and-swap, so nonce consumption and revocation survive reload and stale tabs cannot overwrite newer trust state.
+
+For coordinators that need application-level atomicity, `prepareTrustedMessageVerification()` verifies the actor/key/domain/signature and returns a proposed replay-state revision without persisting it. That proposed registry can be committed in the same coordinator transaction as the accepted graph/log or render-job transition.
+
 ## Deliberate boundary
 
-This is not yet a complete collaboration protocol. Media does **not** yet define network transport, account/session authentication, key enrollment/revocation, causal merge semantics, concurrent-edit conflict resolution, presence, permissions or server persistence. Stale/forked batches fail closed until those policies are explicit.
+This is not yet a complete collaboration protocol. Media does **not** yet define network transport, account/session authentication, authenticated administrative enrollment UI, presence, permissions or server persistence. Key distribution/rotation and account authorization remain deployment responsibilities.
 
-Distributed render workers reuse the same actor/key trust vocabulary in `media.render-worker.v1`. Signed claim and completion messages bind a specific chunk attempt to that identity, and completion requires an injected verifier for the signed SHA-256 artifact descriptor before render state can transition. Coordinator transport, durable nonce state and deployment key lifecycle remain external hardening work.
+Distributed render workers reuse the same actor/key trust vocabulary in `media.render-worker.v1`. Signed claim and completion messages bind a specific chunk attempt to that identity, and completion requires an injected verifier for the signed SHA-256 artifact descriptor before render state can transition. `renderWorkerTrustVerifier(session)` applies the same durable key/replay registry to those messages. Coordinator transport and coordinator/application atomic persistence remain follow-on work.
 
 ## Causal conflict classification
 
