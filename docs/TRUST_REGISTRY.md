@@ -22,6 +22,12 @@ A verifier created by `session.verifier()` resolves an active actor/key for the 
 
 Nonce records are scoped by actor, key and purpose and are bounded by retention/entry limits. Deployments should choose a retention window at least as long as their accepted message freshness window.
 
+## Atomic trusted transitions
+
+`TrustedTransitionSession` composes the pure verification step with an application transition and one injected atomic persistence callback. It serializes messages, prepares the nonce-bearing trust revision, runs the transition against a cloned current state, persists `{ trustRegistry, state }` together and only then publishes either value in memory.
+
+This is the coordinator boundary for collaboration and distributed rendering: a graph/log transition, conflict response or render-job transition can share one commit with replay state without changing the signed protocol formats. Transition or persistence failure leaves both in-memory states unchanged.
+
 ## Studio durable store
 
 `apps/studio/trust-storage.js` uses a separate `media-studio-trust` IndexedDB database. Registry writes are compare-and-swap on the previous revision, so stale tabs cannot overwrite newer enrollment, revocation or replay state. `createStoredTrustRegistrySession()` wires that durable store directly into `TrustRegistrySession`.

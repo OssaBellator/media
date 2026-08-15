@@ -34,6 +34,7 @@ This gives collaboration a deterministic authenticated ingestion boundary withou
 `operationBatchTrustVerifier(session)` plugs directly into the existing operation-batch `verifySignature` callback without changing signed bytes. Studio's `media-studio-trust` IndexedDB store persists registry revisions with compare-and-swap, so nonce consumption and revocation survive reload and stale tabs cannot overwrite newer trust state.
 
 For coordinators that need application-level atomicity, `prepareTrustedMessageVerification()` verifies the actor/key/domain/signature and returns a proposed replay-state revision without persisting it. That proposed registry can be committed in the same coordinator transaction as the accepted graph/log or render-job transition.
+`TrustedTransitionSession` packages that ordering into a serialized verify → application transition → atomic persist → publish session, so conflict responses and accepted graph/log transitions can share the same replay-state commit discipline.
 
 ## Deliberate boundary
 

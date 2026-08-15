@@ -30,6 +30,7 @@ export * from './operation-log.js';
 export * from './operation-batch.js';
 export * from './operation-conflicts.js';
 export * from './trust-registry.js';
+export * from './trusted-transition.js';
 export * from './planner.js';
 export * from './project.js';
 export * from './providers.js';
