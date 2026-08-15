@@ -72,7 +72,11 @@ The core verifier reads the actual stored bytes; object-store metadata, ETags or
 
 `submitRenderWorkerMessageHttp()` is the matching bounded client. Each signed message is sent exactly once. A network or abort failure is reported as **unknown delivery** and the client does not automatically retry, because the server may already have atomically consumed that message nonce and committed its render transition.
 
-None of these modules starts a socket or HTTP listener.
+`RenderWorkerWebSocketSession` is the matching runtime-neutral per-connection server adapter. It reuses the same bounded wire parser/submitter, serializes accepted coordinator work per connection, caps queued messages, returns request-correlated backpressure when possible, serializes outbound sends and never retries a failed response send.
+
+`RenderWorkerWebSocketClientSession` provides the corresponding bounded client-side correlation layer. Pending requests are capped and keyed by request ID; out-of-order responses resolve the correct promise; unsolicited/duplicate responses are protocol errors; connection closure rejects all outstanding work. A failed outbound send is reported as **unknown delivery** and the signed worker message is not automatically replayed.
+
+None of these modules starts a socket, performs an HTTP upgrade or owns a TLS/session-auth implementation.
 
 ## Boundary
 
@@ -81,7 +85,7 @@ The final assembly index remains independent of storage implementation so native
 - a real durable datastore adapter implementing the revisioned `load`/`compareAndSwap` contract with transactional durability;
 - artifact upload/object storage plus a `readArtifact` adapter that returns the exact stored bytes to the SHA-256 verifier;
 - scheduler/worker discovery and retry policy around creation of **new** signed claim/completion messages;
-- a host HTTP/WebSocket listener, TLS/session authentication and deployment authorization policy;
+- a host HTTP listener and/or WebSocket upgrade binding, TLS/session authentication and deployment authorization policy;
 - administrative identity/key enrollment, rotation and revocation operations.
 
 Those deployment services must preserve both reload-on-ambiguous-CAS and no-retry-on-ambiguous-network-delivery rules for signed worker messages.
