@@ -23,7 +23,7 @@ export function createGraph(projectName = "Untitled project") {
 
 export function addNode(graph, node) {
   if (graph.nodes[node.id]) throw new Error(`Node already exists: ${node.id}`);
-  return { ...graph, nodes: { ...graph.nodes, [node.id]: node };
+  return { ...graph, nodes: { ...graph.nodes, [node.id]: node } };
 }
 
 export function updateNode(graph, nodeId, patch) {
