@@ -6,7 +6,7 @@ import {createOperationLog} from '../src/operation-log.js';
 import {createTransaction} from '../src/operations.js';
 import {createOperationBatch,signOperationBatch} from '../src/operation-batch.js';
 import {TrustRegistryError} from '../src/trust-registry.js';
-import {COLLABORATION_WIRE_SCHEMA,createCollaborationSubmitRequest,encodeCollaborationWireRequest,parseCollaborationWireRequest,submitCollaborationWirePayload} from '../src/collaboration-wire.js';
+import {COLLABORATION_WIRE_SCHEMA,createCollaborationSubmitRequest,encodeCollaborationWireRequest,parseCollaborationWireRequest,parseCollaborationWireResponse,submitCollaborationWirePayload} from '../src/collaboration-wire.js';
 
 const secret='wire';
 async function signedBatch(){
@@ -50,6 +50,7 @@ test('wire submit returns transport-safe applied result and current head',async(
   assert.equal(response.response.status,'applied');
   assert.deepEqual(response.response.head,head);
   assert.equal(response.response.conflicts.length,0);
+  assert.deepEqual(parseCollaborationWireResponse(response.body),response.response);
 });
 
 test('wire conflict response strips operation bodies and bounds conflict count',async()=>{
@@ -100,4 +101,12 @@ test('wire leaves unknown application/persistence failures to the hosting transp
   const {batch}=await signedBatch();
   const payload=encodeCollaborationWireRequest(createCollaborationSubmitRequest(batch,{requestId:'req-6'}));
   await assert.rejects(()=>submitCollaborationWirePayload(payload,{submit:async()=>{throw new Error('database down');}}),/database down/);
+});
+
+
+test('wire response parser rejects unknown fields and unsupported statuses',()=>{
+  const base={schema:COLLABORATION_WIRE_SCHEMA,type:'batch.result',requestId:'response-1',status:'applied',verified:true,committed:true,requiresResign:false,safe:true,head:{sequence:0,checksum:null,transactionId:null},localEntries:0,remoteEntries:1,conflicts:[],conflictsTruncated:0};
+  assert.throws(()=>parseCollaborationWireResponse(JSON.stringify({...base,unexpected:true})),/Unsupported collaboration envelope field/);
+  assert.throws(()=>parseCollaborationWireResponse(JSON.stringify({...base,status:'mystery'})),/Unsupported collaboration result status/);
+  assert.throws(()=>parseCollaborationWireResponse('x'.repeat(40),{maxBytes:10}),/byte limit/);
 });

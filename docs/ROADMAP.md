@@ -33,6 +33,7 @@
 - transport-independent collaboration coordinator session that atomically commits authenticated current batches with graph/log/replay state and returns deterministic stale/conflict classifications without rewriting signed history;
 - bounded deterministic `media.collaboration-wire.v1` batch-submit envelopes with UTF-8/JSON size limits, strict fields, transport-safe conflict diagnostics and current-head responses for client re-signing;
 - Web `Request`/`Response` collaboration HTTP adapter with same-origin default, explicit bounded CORS preflight, pre-body authorization hook, streaming body ceiling and generic internal-error responses;
+- bounded collaboration HTTP client with strict wire-response validation, request correlation, typed errors, explicit no-retry semantics for ambiguous delivery and UI-oriented resolution action mapping;
 - serialized Studio `ProjectJournalSession` plus `HistoryJournalSession`, wired into `app.js` for persistence-first edit/Agent/undo/redo/import/project-open recovery;
 - media import/relink Blob writes committed atomically with their graph+journal checkpoint through one IndexedDB transaction;
 - automatic compare-and-swap journal compaction in `HistoryJournalSession` at a 250-entry threshold while preserving the in-memory undo stack;
@@ -46,4 +47,4 @@
 2. platform color management, display calibration and actual HDR swap-chain/output surfaces;
 3. ship real signed native/WASM codec distributions and deployment key-management policy on top of the verified package format;
 4. larger encrypted/adaptive real-media corpus plus HLS/DASH live lab fixtures;
-5. add WebSocket transport around the bounded collaboration wire protocol plus conflict-resolution UI and administrative enrollment/account authorization; add remote render coordinator/artifact-storage transport on the existing atomic trust/application transition boundary.
+5. add WebSocket transport around the bounded collaboration wire protocol plus visual conflict-resolution UI and administrative enrollment/account authorization; add remote render coordinator/artifact-storage transport on the existing atomic trust/application transition boundary.

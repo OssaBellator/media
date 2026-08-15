@@ -62,6 +62,14 @@ The adapter accepts only the configured collaboration path and `POST application
 
 Origin checks are transport hygiene, not actor authentication. Deployments still need a real administrative/account authorization system behind `authorizeRequest()` and should expose the handler only through TLS and their normal service perimeter.
 
+## HTTP client and resolution actions
+
+`packages/core/src/collaboration-client.js` is the matching bounded fetch client. It creates the signed wire request, performs exactly one POST attempt, stream-bounds the response, requires `application/json`, parses the strict wire response schema and correlates successful results to the original request ID. Generic server errors may omit a request ID only when the server rejected bytes before it could parse the envelope.
+
+The client deliberately has **no automatic retry**. Once a coordinator may have consumed the batch nonce and committed the operation, a lost HTTP response is an ambiguous-delivery condition; resending the identical signed batch would be a replay. Callers must reconcile current project/log state before deciding whether to issue a newly signed request.
+
+`collaborationResultAction()` converts server result statuses into UI intent without changing history: `applied` → `accepted`, `rebase-safe` → `resign`, `conflict` → `resolve`, and `different-base`/`different-history` → `refresh`. It does not rebase, alter operations or create a new signature.
+
 ## Deliberate boundary
 
 This is not yet a complete collaboration protocol. Media does **not** yet define network transport, account/session authentication, authenticated administrative enrollment UI, presence, permissions or server persistence. Key distribution/rotation and account authorization remain deployment responsibilities.
