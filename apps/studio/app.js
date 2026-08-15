@@ -42,7 +42,6 @@ import {
   setPlaybackRateOperations,
   setTrackStateOperations,
   slipClipOperations,
-  sourceTimeForClip,
   splitClipOperations,
   stepTransport,
   tickTransport,
@@ -58,16 +57,23 @@ import {
 import { mediaCapabilities, probeMedia } from "./media-engine.js";
 import { createCompositor } from "./gpu-compositor.js";
 import { createStudioView, formatTime } from "./view.js";
-import { BrowserFrameProvider, canvasToBlob, renderPlanToCanvas2D } from "./render-engine.js";
+import { canvasToBlob, renderPlanToCanvas2D } from "./render-engine.js";
+import { createCutPlaybackRuntime } from "./cut-playback-runtime.js";
+import { createCompositionDeliveryRuntime } from "./composition-delivery-runtime.js";
 import { BrowserAudioMixer } from "./audio-engine.js";
 import { findStoredAssetByHash, loadAssetBlob, loadStoredGraph, localAssetUri, saveAssetBlob, saveStoredGraph } from "./storage.js";
 
-const APP_VERSION = "0.4.0";
+const APP_VERSION = "0.16.0";
 const app = document.querySelector("#app");
 const plannerRegistry = new PlannerRegistry().register(createLocalPlannerProvider());
 const capabilities = mediaCapabilities();
 const assetUrls = new Map();
-const frameProvider = new BrowserFrameProvider({ blobResolver: resolveAssetBlob, maxCacheBytes: 256 * 1024 * 1024, concurrency: 2 });
+const cutPlayback = createCutPlaybackRuntime({
+  blobResolver: resolveAssetBlob,
+  sourceCacheBytes: 256 * 1024 * 1024,
+  fallbackCacheBytes: 256 * 1024 * 1024,
+});
+const deliveryRuntime = createCompositionDeliveryRuntime({ blobResolver: resolveAssetBlob });
 const audioMixer = new BrowserAudioMixer({ blobResolver: resolveAssetBlob });
 let history = createHistory(createMediaProject("Untitled project"));
 let workspace = "canvas";
@@ -138,6 +144,32 @@ function cssFilterForNode(node) {
   return filters.join(" ") || "none";
 }
 
+let lastCutPresentationFrame = -1;
+
+function cutPresentationContainer() {
+  return document.querySelector(".cut-preview .composition-frame");
+}
+
+function presentCutFrame(mode = transport.playing ? "playback" : "scrub") {
+  if (!["cut", "motion"].includes(workspace)) return;
+  const container = cutPresentationContainer();
+  if (!container) return;
+  const fps = Math.max(1, Number(composition()?.props.fps ?? 30));
+  const frame = Math.round(transport.time * fps);
+  if (mode === "playback" && frame === lastCutPresentationFrame) return;
+  lastCutPresentationFrame = frame;
+  cutPlayback.present(graph(), transport.time, { mode, container }).catch((error) => {
+    if (error?.name !== "AbortError") persistenceStatus = `Cut playback degraded: ${error.message}`;
+  });
+}
+
+function invalidateRuntimeGraph({ sources = false, assetId = null } = {}) {
+  lastCutPresentationFrame = -1;
+  if (assetId) cutPlayback.invalidateAsset(assetId);
+  else cutPlayback.invalidate({ sources });
+  deliveryRuntime.cancelAll();
+}
+
 function render() {
   syncTransport();
   app.innerHTML = studioView.render({ workspace, persistenceStatus, history, activity, appVersion: APP_VERSION });
@@ -190,8 +222,8 @@ function bindEvents() {
   document.querySelector("#project-input")?.addEventListener("change", importProjectFile);
   document.querySelector("#relink-input")?.addEventListener("change", relinkSelectedAsset);
   document.querySelector("#export")?.addEventListener("click", exportProject);
-  document.querySelector("#undo")?.addEventListener("click", () => { history = undo(history); selectedId = graph().nodes[selectedId] ? selectedId : graph().projectId; persistGraph(); render(); });
-  document.querySelector("#redo")?.addEventListener("click", () => { history = redo(history); persistGraph(); render(); });
+  document.querySelector("#undo")?.addEventListener("click", () => { history = undo(history); selectedId = graph().nodes[selectedId] ? selectedId : graph().projectId; invalidateRuntimeGraph(); persistGraph(); render(); });
+  document.querySelector("#redo")?.addEventListener("click", () => { history = redo(history); invalidateRuntimeGraph(); persistGraph(); render(); });
   document.querySelector("#agent-form")?.addEventListener("submit", (event) => { event.preventDefault(); executeIntent(document.querySelector("#agent-input").value); });
   document.querySelectorAll("[data-command]").forEach((button) => button.addEventListener("click", () => executeIntent(button.dataset.command)));
   bindTimelineSeek();
@@ -206,6 +238,7 @@ function applyEdit(label, operations, { selectId } = {}) {
     if (selectId && next.nodes[selectId]) selectedId = selectId;
     else if (!next.nodes[selectedId]) selectedId = next.projectId;
     syncTransport();
+    invalidateRuntimeGraph();
     activity.unshift({ title: label, detail: `${operations.length} validated operation${operations.length === 1 ? "" : "s"} committed atomically.`, operations: operations.map((operation) => operation.type) });
     persistGraph();
   } catch (error) {
@@ -399,13 +432,58 @@ async function executeRenderAction(action, outputId) {
 
 function safeFilename(value) { return String(value || "output").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "output"; }
 
+async function renderCompositionOutput(outputId, container, button = null) {
+  const output = graph().nodes[outputId];
+  if (!output || output.kind !== "output" || !["mp4", "webm"].includes(container)) return;
+  const originalLabel = button?.textContent;
+  if (button) button.disabled = true;
+  persistenceStatus = `Rendering ${output.name} to ${container.toUpperCase()}…`;
+  try {
+    const result = await deliveryRuntime.render(graph(), output.id, {
+      container,
+      temporalSamples: 8,
+      vectorSupersample: 4,
+      onProgress: ({ stage, ratio = 0 }) => {
+        if (button) button.textContent = `${stage} ${Math.round(ratio * 100)}%`;
+      },
+    });
+    if (!result?.bytes) throw new Error("Delivery runtime returned no encoded bytes");
+    const mimeType = container === "mp4" ? "video/mp4" : "video/webm";
+    downloadBlob(new Blob([result.bytes], { type: mimeType }), `${safeFilename(output.name)}.${container}`);
+    persistenceStatus = `${container.toUpperCase()} rendered locally`;
+    activity.unshift({
+      title: `${container.toUpperCase()} rendered`,
+      detail: `${output.name} · ${result.manifest.frameCount} frames · ${result.hasAudio ? "offline audio mixed" : "video only"}.`,
+      operations: ["evaluate", "fidelity", "encode", container],
+    });
+  } catch (error) {
+    persistenceStatus = error?.name === "AbortError" ? "Render cancelled" : "Render failed";
+    activity.unshift({ title: `${container.toUpperCase()} render failed`, detail: error.message, operations: [] });
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = originalLabel;
+    }
+  }
+  render();
+}
+
+function interceptAdvancedDeliveryRender(event) {
+  const button = event.target.closest?.('[data-advanced-render="mp4"], [data-advanced-render="webm"]');
+  if (!button || !app.contains(button)) return;
+  event.preventDefault();
+  event.stopPropagation();
+  event.stopImmediatePropagation();
+  renderCompositionOutput(button.dataset.outputId, button.dataset.advancedRender, button);
+}
+
 async function renderOutputStill(output) {
   persistenceStatus = `Rendering ${output.name}…`; render();
   try {
     const time = Math.max(Number(output.props.rangeStart ?? 0), Math.min(transport.time, Number(output.props.rangeEnd ?? transport.time)));
     const plan = evaluateComposition(graph(), { compositionId: output.props.compositionId, time });
     const sourceCanvas = document.createElement("canvas");
-    const result = await renderPlanToCanvas2D(sourceCanvas, plan, { assetResolver: (assetId) => graph().nodes[assetId], frameProvider });
+    const result = await renderPlanToCanvas2D(sourceCanvas, plan, { assetResolver: (assetId) => graph().nodes[assetId], frameProvider: cutPlayback.resources.fallbackProvider });
     const targetCanvas = document.createElement("canvas");
     targetCanvas.width = Number(output.props.width);
     targetCanvas.height = Number(output.props.height);
@@ -430,26 +508,23 @@ function executeTransportAction(action) {
   if (action === "step-back") transport = stepTransport(transport, -1);
   if (action === "step-forward") transport = stepTransport(transport, 1);
   if (action === "start") transport = seekTransport(transport, 0);
-  updateTransportDom(); syncPreviewMedia();
+  lastCutPresentationFrame = -1;
+  updateTransportDom();
 }
 function startTransportPlayback() {
   transport = playTransport(transport.time >= transport.duration ? seekTransport(transport, 0) : transport);
   transportLastTick = performance.now();
+  lastCutPresentationFrame = -1;
   audioMixer.play(graph(), transport.time).then((result) => {
     if (result?.scheduled) persistenceStatus = `Playing ${result.scheduled} audio source${result.scheduled === 1 ? "" : "s"}`;
   }).catch(() => {});
-  const media = document.querySelector(".cut-preview video");
-  const node = selectedNode();
-  if (media && node.kind === "clip") {
-    try { media.muted = true; media.currentTime = sourceTimeForClip(node, transport.time); media.playbackRate = Number(node.props.playbackRate ?? 1); media.play().catch(() => {}); } catch {}
-  }
   const loop = (now) => {
     const elapsed = (now - transportLastTick) / 1000;
     transportLastTick = now;
     transport = tickTransport(transport, elapsed);
     updateTransportDom();
     if (transport.playing) transportFrame = requestAnimationFrame(loop);
-    else { transportFrame = null; audioMixer.stop(); document.querySelector(".cut-preview video, .cut-preview audio")?.pause?.(); }
+    else { transportFrame = null; audioMixer.stop(); lastCutPresentationFrame = -1; }
   };
   transportFrame = requestAnimationFrame(loop);
 }
@@ -458,7 +533,8 @@ function stopTransportPlayback() {
   if (transportFrame) cancelAnimationFrame(transportFrame);
   transportFrame = null;
   audioMixer.stop();
-  document.querySelector(".cut-preview video, .cut-preview audio")?.pause?.();
+  cutPlayback.cancelInteractive();
+  lastCutPresentationFrame = -1;
 }
 function updateTransportDom() {
   const duration = currentTimelineDuration();
@@ -472,6 +548,7 @@ function updateTransportDom() {
   const motionPlayhead = document.querySelector("#motion-playhead");
   if (motionPlayhead) motionPlayhead.style.left = `${Math.min(100, (transport.time / duration) * 100)}%`;
   updateAnimatedLayerDom();
+  presentCutFrame(transport.playing ? "playback" : "scrub");
 }
 function updateAnimatedLayerDom() {
   const comp = composition();
@@ -489,13 +566,6 @@ function updateAnimatedLayerDom() {
   });
 }
 
-function syncPreviewMedia() {
-  const media = document.querySelector(".cut-preview video, .cut-preview audio");
-  const node = selectedNode();
-  if (!media || node.kind !== "clip") return;
-  try { media.currentTime = Math.max(0, sourceTimeForClip(node, transport.time)); } catch {}
-}
-
 function bindTimelineSeek() {
   document.querySelectorAll(".track-lane, [data-seek-ruler]").forEach((element) => element.addEventListener("pointerdown", (event) => {
     if (event.target.closest(".clip")) return;
@@ -503,7 +573,8 @@ function bindTimelineSeek() {
     const ratio = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
     stopTransportPlayback();
     transport = seekTransport(transport, ratio * currentTimelineDuration());
-    updateTransportDom(); syncPreviewMedia();
+    lastCutPresentationFrame = -1;
+    updateTransportDom();
   }));
 }
 function bindTimelineDragging() {
@@ -594,7 +665,7 @@ async function importFiles(event) {
   }
   history = commit(history, next, `Import ${files.length} media file${files.length === 1 ? "" : "s"}`);
   await Promise.all(saved.map(([asset, file]) => saveAssetBlob(asset.id, file, { ...asset.props, name: asset.name }).catch(() => false)));
-  frameProvider.clear(); audioMixer.clearCache();
+  invalidateRuntimeGraph({ sources: true }); audioMixer.clearCache();
   await persistGraph();
   const newestAsset = nodesByKind(graph(), "asset").at(-1);
   if (newestAsset) selectedId = newestAsset.id;
@@ -616,7 +687,7 @@ async function relinkSelectedAsset(event) {
   await saveAssetBlob(asset.id, file, { ...asset.props, ...metadata, name: file.name, mimeType: file.type, size: file.size });
   if (assetUrls.has(asset.id)) URL.revokeObjectURL(assetUrls.get(asset.id));
   assetUrls.set(asset.id, URL.createObjectURL(file));
-  frameProvider.clear(); audioMixer.clearCache();
+  invalidateRuntimeGraph({ assetId: asset.id }); audioMixer.clearCache();
   const patch = { uri: localAssetUri(asset.id), mimeType: file.type, size: file.size, ...metadata };
   applyEdit(`Relink ${asset.name}`, [{ type: "node.update", nodeId: asset.id, patch: { props: patch } }], { selectId: asset.id });
 }
@@ -632,6 +703,7 @@ async function importProjectFile(event) {
     workspace = "canvas";
     syncTransport(); transport = seekTransport(transport, 0);
     const fingerprintMatches = await hydrateAssetUrls();
+    invalidateRuntimeGraph({ sources: true });
     await persistGraph();
     const matchDetail = fingerprintMatches ? ` ${fingerprintMatches} source${fingerprintMatches === 1 ? "" : "s"} were relinked automatically by fingerprint.` : "";
     activity.unshift({ title: "Project opened", detail: `${parsed.migratedFrom ? `Opened and migrated ${parsed.migratedFrom}.` : `Opened Media project file v${parsed.fileVersion}.`}${matchDetail}`, operations: ["deserialize", "validate", "hydrate", ...(fingerprintMatches ? ["fingerprint-relink"] : [])] });
@@ -642,11 +714,14 @@ async function importProjectFile(event) {
 async function executeIntent(intent) {
   if (!intent?.trim()) return;
   const lower = intent.trim().toLowerCase();
-  if (lower === "undo") { history = undo(history); persistGraph(); render(); return; }
-  if (lower === "redo") { history = redo(history); persistGraph(); render(); return; }
+  if (lower === "undo") { history = undo(history); invalidateRuntimeGraph(); persistGraph(); render(); return; }
+  if (lower === "redo") { history = redo(history); invalidateRuntimeGraph(); persistGraph(); render(); return; }
   try {
     const plan = await planWithProvider(plannerRegistry.get("local"), graph(), intent, { selectedId, time: transport.time, workspace });
-    if (plan.operations.length) history = commit(history, applyOperations(graph(), plan.operations), plan.summary);
+    if (plan.operations.length) {
+      history = commit(history, applyOperations(graph(), plan.operations), plan.summary);
+      invalidateRuntimeGraph();
+    }
     activity.unshift({ title: intent, detail: plan.summary, operations: plan.operations.map((operation) => operation.type) });
     await persistGraph();
   } catch (error) { activity.unshift({ title: `${intent} failed`, detail: error.message, operations: [] }); }
@@ -723,10 +798,19 @@ async function bootstrap() {
   syncTransport(); render();
 }
 
+app.addEventListener("click", interceptAdvancedDeliveryRender, { capture: true });
+
+window.addEventListener("beforeunload", () => {
+  stopTransportPlayback();
+  deliveryRuntime.close();
+  cutPlayback.close();
+  for (const url of assetUrls.values()) URL.revokeObjectURL(url);
+});
+
 document.addEventListener("keydown", (event) => {
   const modifier = event.metaKey || event.ctrlKey;
   if (modifier && event.key.toLowerCase() === "z") {
-    event.preventDefault(); history = event.shiftKey ? redo(history) : undo(history); persistGraph(); render(); return;
+    event.preventDefault(); history = event.shiftKey ? redo(history) : undo(history); invalidateRuntimeGraph(); persistGraph(); render(); return;
   }
   if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
   if (event.code === "Space" && ["cut", "motion"].includes(workspace)) { event.preventDefault(); executeTransportAction("toggle"); }
