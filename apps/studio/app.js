@@ -1,7 +1,7 @@
 import {
   PlannerRegistry,
   addAsset,
-  applyOperations,
+  applyTransaction,
   assertProjectInvariants,
   buildSourceManifest,
   bladeAllAtTimeOperations,
@@ -18,6 +18,7 @@ import {
   createTextLayerOperations,
   duplicateClipOperations,
   createTransport,
+  createTransaction,
   createEffectOperations,
   effectsForTarget,
   evaluateAnimatedTransform,
@@ -61,7 +62,8 @@ import { canvasToBlob, renderPlanToCanvas2D } from "./render-engine.js";
 import { createCutPlaybackRuntime } from "./cut-playback-runtime.js";
 import { createCompositionDeliveryRuntime } from "./composition-delivery-runtime.js";
 import { BrowserAudioMixer } from "./audio-engine.js";
-import { findStoredAssetByHash, loadAssetBlob, loadStoredGraph, localAssetUri, saveAssetBlob, saveStoredGraph } from "./storage.js";
+import { HistoryJournalSession, recoverHistoryJournalSession } from "./history-journal-session.js";
+import { findStoredAssetByHash, loadAssetBlob, loadStoredGraph, loadStoredOperationRecovery, localAssetUri, saveAssetBlob, saveStoredGraph, saveStoredGraphWithOperation } from "./storage.js";
 
 const APP_VERSION = "0.16.0";
 const app = document.querySelector("#app");
@@ -76,6 +78,7 @@ const cutPlayback = createCutPlaybackRuntime({
 const deliveryRuntime = createCompositionDeliveryRuntime({ blobResolver: resolveAssetBlob });
 const audioMixer = new BrowserAudioMixer({ blobResolver: resolveAssetBlob });
 let history = createHistory(createMediaProject("Untitled project"));
+let historyJournal = null;
 let workspace = "canvas";
 let selectedId = history.present.projectId;
 let persistenceStatus = "Local workspace ready";
@@ -170,6 +173,40 @@ function invalidateRuntimeGraph({ sources = false, assetId = null } = {}) {
   deliveryRuntime.cancelAll();
 }
 
+async function persistJournalGraph(nextGraph, entry) {
+  assertProjectInvariants(nextGraph);
+  const saved = await saveStoredGraphWithOperation(nextGraph, entry);
+  persistenceStatus = saved ? `Saved locally · journal ${entry.sequence}` : "Session-only storage";
+  return saved;
+}
+function journalBindings() {
+  return {
+    applyTransaction,
+    createTransaction,
+    persist: persistJournalGraph,
+    commitHistory: commit,
+    undoHistory: undo,
+    redoHistory: redo,
+    createHistory,
+  };
+}
+function adoptJournalHistory(result) {
+  history = result.history;
+  selectedId = graph().nodes[selectedId] ? selectedId : graph().projectId;
+  syncTransport();
+}
+async function executeHistoryAction(action, { source = "ui" } = {}) {
+  try {
+    const result = await historyJournal[action]({ source });
+    adoptJournalHistory(result);
+    if (!result.noOp) invalidateRuntimeGraph();
+  } catch (error) {
+    persistenceStatus = `History ${action} failed`;
+    activity.unshift({ title: `History ${action} failed`, detail: error.message, operations: [] });
+  }
+  render();
+}
+
 function render() {
   syncTransport();
   app.innerHTML = studioView.render({ workspace, persistenceStatus, history, activity, appVersion: APP_VERSION });
@@ -222,8 +259,8 @@ function bindEvents() {
   document.querySelector("#project-input")?.addEventListener("change", importProjectFile);
   document.querySelector("#relink-input")?.addEventListener("change", relinkSelectedAsset);
   document.querySelector("#export")?.addEventListener("click", exportProject);
-  document.querySelector("#undo")?.addEventListener("click", () => { history = undo(history); selectedId = graph().nodes[selectedId] ? selectedId : graph().projectId; invalidateRuntimeGraph(); persistGraph(); render(); });
-  document.querySelector("#redo")?.addEventListener("click", () => { history = redo(history); invalidateRuntimeGraph(); persistGraph(); render(); });
+  document.querySelector("#undo")?.addEventListener("click", () => executeHistoryAction("undo"));
+  document.querySelector("#redo")?.addEventListener("click", () => executeHistoryAction("redo"));
   document.querySelector("#agent-form")?.addEventListener("submit", (event) => { event.preventDefault(); executeIntent(document.querySelector("#agent-input").value); });
   document.querySelectorAll("[data-command]").forEach((button) => button.addEventListener("click", () => executeIntent(button.dataset.command)));
   bindTimelineSeek();
@@ -231,17 +268,15 @@ function bindEvents() {
   bindCanvasDragging();
 }
 
-function applyEdit(label, operations, { selectId } = {}) {
+async function applyEdit(label, operations, { selectId } = {}) {
   try {
-    const next = applyOperations(graph(), operations);
-    history = commit(history, next, label);
-    if (selectId && next.nodes[selectId]) selectedId = selectId;
-    else if (!next.nodes[selectedId]) selectedId = next.projectId;
-    syncTransport();
+    const result = await historyJournal.edit(label, operations, { source: "studio" });
+    adoptJournalHistory(result);
+    if (selectId && result.graph.nodes[selectId]) selectedId = selectId;
     invalidateRuntimeGraph();
-    activity.unshift({ title: label, detail: `${operations.length} validated operation${operations.length === 1 ? "" : "s"} committed atomically.`, operations: operations.map((operation) => operation.type) });
-    persistGraph();
+    activity.unshift({ title: label, detail: `${operations.length} validated operation${operations.length === 1 ? "" : "s"} committed atomically at journal ${result.entry.sequence}.`, operations: operations.map((operation) => operation.type) });
   } catch (error) {
+    persistenceStatus = `Save failed: ${error.message}`;
     activity.unshift({ title: `${label} failed`, detail: error.message, operations: [] });
   }
   render();
@@ -653,20 +688,19 @@ async function importFiles(event) {
   const files = [...(event.target.files ?? [])];
   if (!files.length) return;
   persistenceStatus = `Analyzing ${files.length} media file${files.length === 1 ? "" : "s"}…`; render();
-  let next = graph();
   const saved = [];
   for (const file of files) {
     const metadata = await probeMedia(file);
     let asset = createAsset({ name: file.name, mimeType: file.type, size: file.size, ...metadata });
     asset = { ...asset, props: { ...asset.props, uri: localAssetUri(asset.id) } };
-    next = addAsset(next, asset);
     saved.push([asset, file]);
     assetUrls.set(asset.id, URL.createObjectURL(file));
   }
-  history = commit(history, next, `Import ${files.length} media file${files.length === 1 ? "" : "s"}`);
   await Promise.all(saved.map(([asset, file]) => saveAssetBlob(asset.id, file, { ...asset.props, name: asset.name }).catch(() => false)));
+  const label = `Import ${files.length} media file${files.length === 1 ? "" : "s"}`;
+  const result = await historyJournal.commitGraphFactory(label, (current) => saved.reduce((next, [asset]) => addAsset(next, asset), current), { source: "media-import" });
+  adoptJournalHistory(result);
   invalidateRuntimeGraph({ sources: true }); audioMixer.clearCache();
-  await persistGraph();
   const newestAsset = nodesByKind(graph(), "asset").at(-1);
   if (newestAsset) selectedId = newestAsset.id;
   activity.unshift({ title: "Media imported", detail: `${files.length} asset${files.length === 1 ? "" : "s"} analyzed, fingerprinted and persisted. Audio assets include lightweight waveform data when decoding is available.`, operations: ["probe", "node.add", "edge.add", "indexeddb.put"] });
@@ -698,13 +732,13 @@ async function importProjectFile(event) {
   try {
     stopTransportPlayback();
     const parsed = parseProjectFile(await file.text());
-    history = createHistory(parsed.graph);
+    const result = await historyJournal.replace("Open project", parsed.graph, { source: "project-import", fileVersion: parsed.fileVersion, migratedFrom: parsed.migratedFrom ?? null });
+    adoptJournalHistory(result);
     selectedId = graph().projectId;
     workspace = "canvas";
-    syncTransport(); transport = seekTransport(transport, 0);
+    transport = seekTransport(transport, 0);
     const fingerprintMatches = await hydrateAssetUrls();
     invalidateRuntimeGraph({ sources: true });
-    await persistGraph();
     const matchDetail = fingerprintMatches ? ` ${fingerprintMatches} source${fingerprintMatches === 1 ? "" : "s"} were relinked automatically by fingerprint.` : "";
     activity.unshift({ title: "Project opened", detail: `${parsed.migratedFrom ? `Opened and migrated ${parsed.migratedFrom}.` : `Opened Media project file v${parsed.fileVersion}.`}${matchDetail}`, operations: ["deserialize", "validate", "hydrate", ...(fingerprintMatches ? ["fingerprint-relink"] : [])] });
   } catch (error) { activity.unshift({ title: "Project open failed", detail: error.message, operations: [] }); }
@@ -714,17 +748,17 @@ async function importProjectFile(event) {
 async function executeIntent(intent) {
   if (!intent?.trim()) return;
   const lower = intent.trim().toLowerCase();
-  if (lower === "undo") { history = undo(history); invalidateRuntimeGraph(); persistGraph(); render(); return; }
-  if (lower === "redo") { history = redo(history); invalidateRuntimeGraph(); persistGraph(); render(); return; }
+  if (lower === "undo") { await executeHistoryAction("undo", { source: "agent" }); return; }
+  if (lower === "redo") { await executeHistoryAction("redo", { source: "agent" }); return; }
   try {
     const plan = await planWithProvider(plannerRegistry.get("local"), graph(), intent, { selectedId, time: transport.time, workspace });
     if (plan.operations.length) {
-      history = commit(history, applyOperations(graph(), plan.operations), plan.summary);
+      const result = await historyJournal.edit(plan.summary, plan.operations, { source: "agent", intent });
+      adoptJournalHistory(result);
       invalidateRuntimeGraph();
     }
     activity.unshift({ title: intent, detail: plan.summary, operations: plan.operations.map((operation) => operation.type) });
-    await persistGraph();
-  } catch (error) { activity.unshift({ title: `${intent} failed`, detail: error.message, operations: [] }); }
+  } catch (error) { persistenceStatus = `Agent edit failed: ${error.message}`; activity.unshift({ title: `${intent} failed`, detail: error.message, operations: [] }); }
   render();
 }
 
@@ -743,13 +777,6 @@ function exportProject() {
   anchor.click(); URL.revokeObjectURL(url);
 }
 
-async function persistGraph() {
-  try {
-    assertProjectInvariants(graph());
-    const saved = await saveStoredGraph(graph());
-    persistenceStatus = saved ? "Saved locally" : "Session-only storage";
-  } catch (error) { persistenceStatus = `Local save unavailable: ${error.message}`; }
-}
 async function hydrateAssetUrls() {
   for (const url of assetUrls.values()) URL.revokeObjectURL(url);
   assetUrls.clear();
@@ -785,16 +812,42 @@ async function resolveAssetBlob(assetId, asset) {
 
 async function bootstrap() {
   try {
-    const stored = await loadStoredGraph();
-    if (stored) {
+    let recovery = null;
+    let journalReset = null;
+    try {
+      recovery = await loadStoredOperationRecovery();
+    } catch (journalError) {
+      const stored = await loadStoredGraph().catch(() => null);
+      if (!stored) throw journalError;
       assertProjectInvariants(stored);
-      history = createHistory(stored);
+      const reset = await saveStoredGraph(stored);
+      if (!reset) throw journalError;
+      recovery = await loadStoredOperationRecovery();
+      journalReset = journalError;
+    }
+    if (recovery) {
+      assertProjectInvariants(recovery.graph);
+      historyJournal = recoverHistoryJournalSession({ recovery, ...journalBindings() });
+      history = historyJournal.history;
       selectedId = graph().projectId;
-      persistenceStatus = "Restored local workspace";
-      activity[0] = { title: "Workspace restored", detail: "Project graph and local source blobs were restored from IndexedDB.", operations: [] };
+      persistenceStatus = journalReset ? "Recovered workspace · journal reset" : `Restored local workspace · journal ${recovery.sequence}`;
+      activity[0] = journalReset
+        ? { title: "Workspace recovered", detail: `Latest graph checkpoint passed validation; a damaged operation journal was reset (${journalReset.message}).`, operations: ["journal.validate", "journal.reset"] }
+        : { title: "Workspace restored", detail: `Project graph, local source blobs and ${recovery.sequence} journal entr${recovery.sequence === 1 ? "y" : "ies"} were restored from IndexedDB.`, operations: ["journal.validate", "journal.replay"] };
+    } else {
+      const saved = await saveStoredGraph(graph());
+      historyJournal = new HistoryJournalSession({ history, ...journalBindings() });
+      persistenceStatus = saved ? "Local workspace ready · journal 0" : "Session-only storage";
     }
     await hydrateAssetUrls();
-  } catch (error) { persistenceStatus = `Started fresh workspace: ${error.message}`; }
+  } catch (error) {
+    history = createHistory(createMediaProject("Untitled project"));
+    historyJournal = new HistoryJournalSession({ history, ...journalBindings(), persist: async () => false });
+    selectedId = graph().projectId;
+    persistenceStatus = `Started session-only workspace: ${error.message}`;
+    activity[0] = { title: "Recovery unavailable", detail: error.message, operations: [] };
+    await hydrateAssetUrls().catch(() => 0);
+  }
   syncTransport(); render();
 }
 
@@ -810,7 +863,7 @@ window.addEventListener("beforeunload", () => {
 document.addEventListener("keydown", (event) => {
   const modifier = event.metaKey || event.ctrlKey;
   if (modifier && event.key.toLowerCase() === "z") {
-    event.preventDefault(); history = event.shiftKey ? redo(history) : undo(history); invalidateRuntimeGraph(); persistGraph(); render(); return;
+    event.preventDefault(); executeHistoryAction(event.shiftKey ? "redo" : "undo", { source: "keyboard" }); return;
   }
   if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
   if (event.code === "Space" && ["cut", "motion"].includes(workspace)) { event.preventDefault(); executeTransportAction("toggle"); }

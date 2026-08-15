@@ -33,11 +33,13 @@ The workspace record retains both the latest graph and `journalBaseGraph`. `load
 
 The legacy `saveStoredGraph(graph)` path deliberately starts a new journal base: it clears old entries and stores the supplied graph as both the current and base checkpoint at sequence zero. This keeps imports/resets from leaving an apparently valid journal attached to an unrelated graph.
 
-## Deliberate boundary
+## Studio adoption and remaining boundary
 
-The Studio edit dispatcher does not yet append every `applyEdit`/Agent transaction through this journal. Until that handoff lands, normal edits continue to use the compatibility snapshot path and therefore reset the journal base. The persistence primitives and recovery validation are in place first so app adoption can be mechanical and testable.
+`app.js` now owns a `HistoryJournalSession`. Normal `applyEdit` operations and Agent plans append compact operation transactions; undo/redo use replayable history checkpoints; media import uses a serialized graph factory checkpoint that preserves undo history; project open uses a replacement checkpoint. Bootstrap validates and replays the stored journal before rendering. If the journal is damaged but the atomically stored graph checkpoint still passes project invariants, Studio preserves that latest graph, resets the damaged journal to a new base, and reports the recovery in activity state.
 
-A future collaboration protocol will need authenticated actor identity, causal ordering/conflict semantics and stronger integrity/authenticity than this local corruption checksum.
+The next crash-safety boundary is source storage. Media import/relink currently write asset Blobs in the `assets` store separately from the graph+journal transaction. A crash can therefore leave an orphan Blob or a graph checkpoint whose replacement Blob did not commit. The next storage step should allow asset Blob mutations and the graph/journal entry to share one IndexedDB transaction.
+
+A future collaboration protocol will also need authenticated actor identity, causal ordering/conflict semantics and stronger integrity/authenticity than this local corruption checksum.
 
 ## Studio journal session
 

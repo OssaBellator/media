@@ -10,11 +10,12 @@
     "test:watch": "node --test --watch packages/core/test/*.test.js apps/studio/test/*.test.js",
     "syntax:check": "node scripts/check-syntax.mjs",
     "check:ownership": "node scripts/check-runtime-ownership.mjs",
+    "check:journal": "node scripts/check-journal-integration.mjs",
     "build": "node scripts/build.mjs",
     "conformance": "node scripts/conformance.mjs",
     "conformance:history": "node scripts/conformance-history.mjs",
     "stress": "node scripts/stress.mjs",
-    "check": "npm run syntax:check && npm run check:ownership && npm test && npm run build"
+    "check": "npm run syntax:check && npm run check:ownership && npm run check:journal && npm test && npm run build"
   },
   "engines": {
     "node": ">=22"
