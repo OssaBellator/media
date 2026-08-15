@@ -15,7 +15,8 @@
     "conformance": "node scripts/conformance.mjs",
     "conformance:history": "node scripts/conformance-history.mjs",
     "stress": "node scripts/stress.mjs",
-    "check": "npm run syntax:check && npm run check:ownership && npm run check:journal && npm test && npm run build"
+    "check": "npm run syntax:check && npm run check:ownership && npm run check:journal && npm run check:maintenance && npm test && npm run build",
+    "check:maintenance": "node scripts/check-journal-maintenance.mjs"
   },
   "engines": {
     "node": ">=22"

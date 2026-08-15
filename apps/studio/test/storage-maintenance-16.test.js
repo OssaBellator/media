@@ -1,0 +1,10 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mergeAssetRetentionGraph, garbageCollectStoredAssetsWithRetention } from '../storage-maintenance.js';
+
+function request(result){const r={result:undefined,error:null};queueMicrotask(()=>{r.result=result;r.onsuccess?.();});return r;}
+function fakeDb({graph,assets}){const rows=new Map(assets.map((row)=>[row.id,{...row}]));const calls=[];return{rows,calls,db:{transaction(names,mode){calls.push({names:[...names],mode});const tx={oncomplete:null,onerror:null,onabort:null,error:null,abort(){this.onabort?.();},objectStore(name){if(name==='workspace')return{get(){return request({key:'current',graph});}};return{getAll(){return request([...rows.values()]);},delete(id){rows.delete(id);}};}};setTimeout(()=>tx.oncomplete?.(),0);return tx;}}};}
+
+test('retention graph unions persisted and history-only asset identities',()=>{const merged=mergeAssetRetentionGraph({projectId:'p',nodes:{a:{id:'a',kind:'asset',props:{hash:'ha'}}}},{nodes:{b:{id:'b',kind:'asset',props:{hash:'hb'}}}});assert.deepEqual(Object.keys(merged.nodes).sort(),['a','b']);});
+
+test('retention-aware cleanup preserves persisted, undo and fingerprint sources',async()=>{const now=Date.parse('2026-08-15T00:00:00Z'),fake=fakeDb({graph:{projectId:'p',nodes:{current:{id:'current',kind:'asset',props:{hash:'hc'}}}},assets:[{id:'current',hash:'hc',size:1,savedAt:'2020-01-01T00:00:00Z'},{id:'undo',hash:'hu',size:2,savedAt:'2020-01-01T00:00:00Z'},{id:'alias',hash:'hu',size:3,savedAt:'2020-01-01T00:00:00Z'},{id:'old',hash:'old',size:4,savedAt:'2020-01-01T00:00:00Z'}]});const result=await garbageCollectStoredAssetsWithRetention({retentionGraph:{nodes:{undo:{id:'undo',kind:'asset',props:{hash:'hu'}}}},now,olderThanMs:1000,databaseProvider:async()=>fake.db});assert.deepEqual(result.deletedIds,['old']);assert.equal(fake.rows.has('current'),true);assert.equal(fake.rows.has('undo'),true);assert.equal(fake.rows.has('alias'),true);assert.equal(fake.rows.has('old'),false);assert.deepEqual(fake.calls,[{names:['workspace','assets'],mode:'readwrite'}]);});

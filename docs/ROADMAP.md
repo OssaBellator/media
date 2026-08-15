@@ -16,8 +16,8 @@
 - deterministic checksummed operation-log primitives plus atomic IndexedDB graph/journal checkpoints and recovery validation;
 - serialized Studio `ProjectJournalSession` plus `HistoryJournalSession`, wired into `app.js` for persistence-first edit/Agent/undo/redo/import/project-open recovery;
 - media import/relink Blob writes committed atomically with their graph+journal checkpoint through one IndexedDB transaction;
-- compare-and-swap journal compaction primitives that preserve the in-memory undo stack;
-- conservative source-Blob garbage-collection primitives that preserve current IDs and fingerprint relink candidates.
+- automatic compare-and-swap journal compaction in `HistoryJournalSession` at a 250-entry threshold while preserving the in-memory undo stack;
+- undo-aware quota-pressure source-Blob cleanup in `HistoryJournalSession`, targeting 90% → 80% usage while retaining persisted and present/past/future asset identities plus fingerprint aliases.
 
 ## Next hardening
 
@@ -27,4 +27,4 @@
 4. signed/integrity-pinned codec plugin packaging and real native/WASM codec distributions;
 5. larger encrypted/adaptive real-media corpus plus HLS/DASH live lab fixtures;
 6. integrate MP4 chunk planning directly into final writer interleave policy and stress multi-day outputs;
-7. wire bounded journal compaction and quota-pressure source cleanup into Studio, then remove the remaining `advanced-runtime.js` DOM/storage observer ownership.
+7. remove the remaining `advanced-runtime.js` DOM/storage observer ownership, then add authenticated collaboration and distributed render execution.
