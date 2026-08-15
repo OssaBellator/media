@@ -1,7 +1,55 @@
 import { edgesFrom, edgesTo } from './graph.js';
 
 export const SEMANTIC_INDEX_SCHEMA = 'media.semantic-index.v1';
+export const MAX_SEMANTIC_QUERY_CHARS = 4096;
+export const MAX_SEMANTIC_KIND_FILTERS = 64;
+export const MAX_SEMANTIC_KIND_CHARS = 64;
+export const MAX_SEMANTIC_SEARCH_RESULTS = 200;
+export const MAX_SEMANTIC_TERMS_PER_NODE = 2048;
 const DEFAULT_MAX_TERMS_PER_NODE = 256;
+const SEMANTIC_INDEX_OPTION_KEYS = new Set(['kinds', 'maxTermsPerNode']);
+const SEMANTIC_SEARCH_OPTION_KEYS = new Set(['limit', 'kinds', 'minimumScore']);
+const SEMANTIC_GRAPH_SEARCH_OPTION_KEYS = new Set(['limit', 'kinds', 'minimumScore', 'maxTermsPerNode']);
+
+function dataConfig(value, label, allowedKeys) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${label} must be a plain data object`);
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) throw new Error(`${label} must be a plain data object`);
+  const clean = {};
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  for (const key of Reflect.ownKeys(descriptors)) {
+    if (typeof key !== 'string' || !allowedKeys.has(key)) throw new Error(`Unsupported ${label} field: ${String(key)}`);
+    const descriptor = descriptors[key];
+    if (!descriptor?.enumerable || !Object.hasOwn(descriptor, 'value')) throw new Error(`${label} must contain enumerable data fields only`);
+    clean[key] = descriptor.value;
+  }
+  return clean;
+}
+function boundedInteger(value, label, fallback, min, max) {
+  if (value === undefined) return fallback;
+  if (!Number.isInteger(value) || value < min || value > max) throw new Error(`${label} must be an integer between ${min} and ${max}`);
+  return value;
+}
+function normalizeKinds(kinds) {
+  if (kinds == null) return null;
+  if (!Array.isArray(kinds) || kinds.length > MAX_SEMANTIC_KIND_FILTERS) throw new Error(`Semantic kinds must be an array with at most ${MAX_SEMANTIC_KIND_FILTERS} entries`);
+  const normalized = [];
+  for (let index = 0; index < kinds.length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(kinds, String(index));
+    if (!descriptor?.enumerable || !Object.hasOwn(descriptor, 'value')) throw new Error('Semantic kinds must contain enumerable data values only');
+    const kind = descriptor.value;
+    if (typeof kind !== 'string' || !kind.trim()) throw new Error('Semantic kind must be a non-empty string');
+    const clean = kind.trim();
+    if (clean.length > MAX_SEMANTIC_KIND_CHARS) throw new Error(`Semantic kind exceeds ${MAX_SEMANTIC_KIND_CHARS} characters`);
+    normalized.push(clean);
+  }
+  return [...new Set(normalized)].sort();
+}
+function normalizedQuery(query) {
+  if (typeof query !== 'string') throw new Error('Semantic query must be a string');
+  if (query.length > MAX_SEMANTIC_QUERY_CHARS) throw new Error(`Semantic query exceeds ${MAX_SEMANTIC_QUERY_CHARS} characters`);
+  return query.normalize('NFKC').toLowerCase().trim();
+}
 
 function normalize(value) {
   return String(value ?? '').normalize('NFKC').toLowerCase();
@@ -77,9 +125,11 @@ function documentForNode(graph, node, maxTerms) {
   };
 }
 
-export function createSemanticIndex(graph, { kinds = null, maxTermsPerNode = DEFAULT_MAX_TERMS_PER_NODE } = {}) {
-  const allowed = kinds == null ? null : new Set(kinds.map(String));
-  const maxTerms = Math.max(16, Math.min(2048, Math.round(Number(maxTermsPerNode) || DEFAULT_MAX_TERMS_PER_NODE)));
+export function createSemanticIndex(graph, options = {}) {
+  const config = dataConfig(options, 'Semantic index options', SEMANTIC_INDEX_OPTION_KEYS);
+  const normalizedKinds = normalizeKinds(config.kinds ?? null);
+  const allowed = normalizedKinds == null ? null : new Set(normalizedKinds);
+  const maxTerms = boundedInteger(config.maxTermsPerNode, 'Semantic maxTermsPerNode', DEFAULT_MAX_TERMS_PER_NODE, 16, MAX_SEMANTIC_TERMS_PER_NODE);
   const documents = Object.values(graph?.nodes ?? {})
     .filter((node) => !allowed || allowed.has(node.kind))
     .map((node) => documentForNode(graph, node, maxTerms))
@@ -87,14 +137,17 @@ export function createSemanticIndex(graph, { kinds = null, maxTermsPerNode = DEF
   return { schema: SEMANTIC_INDEX_SCHEMA, projectId: graph.projectId, documents };
 }
 
-export function searchSemanticIndex(index, query, { limit = 20, kinds = null, minimumScore = 1 } = {}) {
+export function searchSemanticIndex(index, query, options = {}) {
   if (!index || index.schema !== SEMANTIC_INDEX_SCHEMA || !Array.isArray(index.documents)) throw new Error('A valid semantic index is required');
-  const queryText = normalize(query).trim();
+  const config = dataConfig(options, 'Semantic search options', SEMANTIC_SEARCH_OPTION_KEYS);
+  const queryText = normalizedQuery(query);
   const queryTerms = [...new Set(tokens(queryText))];
   if (!queryTerms.length) return [];
-  const allowed = kinds == null ? null : new Set(kinds.map(String));
-  const maxResults = Math.max(1, Math.min(200, Math.round(Number(limit) || 20)));
-  const threshold = Math.max(0, Number(minimumScore) || 0);
+  const normalizedKinds = normalizeKinds(config.kinds ?? null);
+  const allowed = normalizedKinds == null ? null : new Set(normalizedKinds);
+  const maxResults = boundedInteger(config.limit, 'Semantic search limit', 20, 1, MAX_SEMANTIC_SEARCH_RESULTS);
+  const threshold = config.minimumScore === undefined ? 1 : config.minimumScore;
+  if (typeof threshold !== 'number' || !Number.isFinite(threshold) || threshold < 0) throw new Error('Semantic minimumScore must be a finite non-negative number');
   const results = [];
   for (const document of index.documents) {
     if (allowed && !allowed.has(document.kind)) continue;
@@ -116,5 +169,10 @@ export function searchSemanticIndex(index, query, { limit = 20, kinds = null, mi
 }
 
 export function searchSemanticGraph(graph, query, options = {}) {
-  return searchSemanticIndex(createSemanticIndex(graph, options), query, options);
+  const config = dataConfig(options, 'Semantic graph search options', SEMANTIC_GRAPH_SEARCH_OPTION_KEYS);
+  return searchSemanticIndex(
+    createSemanticIndex(graph, { kinds: config.kinds ?? null, maxTermsPerNode: config.maxTermsPerNode ?? DEFAULT_MAX_TERMS_PER_NODE }),
+    query,
+    { limit: config.limit ?? 20, kinds: config.kinds ?? null, minimumScore: config.minimumScore ?? 1 },
+  );
 }

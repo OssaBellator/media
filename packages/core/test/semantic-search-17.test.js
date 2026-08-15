@@ -3,7 +3,7 @@ import test from 'node:test';
 import { createGraph, createNode } from '../src/graph.js';
 import { applyOperations } from '../src/operations.js';
 import { createCreativeObjectOperations, linkCreativeObjectOperations } from '../src/creative-object.js';
-import { createSemanticIndex, searchSemanticGraph, searchSemanticIndex } from '../src/semantic-search.js';
+import { MAX_SEMANTIC_QUERY_CHARS, createSemanticIndex, searchSemanticGraph, searchSemanticIndex } from '../src/semantic-search.js';
 
 test('semantic search ranks names object types tags and semantic attributes deterministically', () => {
   let graph = createGraph('Launch campaign');
@@ -55,4 +55,38 @@ test('semantic indexing bounds deep metadata expansion instead of exploding cont
   const index = createSemanticIndex(graph, { maxTermsPerNode: 32 });
   const document = index.documents.find((item) => item.id === ops[0].node.id);
   assert.ok(Object.keys(document.terms).length <= 32);
+});
+
+test('semantic search rejects coercive queries and accessor-bearing options without executing them', () => {
+  const graph = createGraph('Campaign');
+  let coercions = 0;
+  const query = { toString() { coercions += 1; return 'Campaign'; } };
+  assert.throws(() => searchSemanticGraph(graph, query), /Semantic query must be a string/);
+  assert.equal(coercions, 0);
+
+  let getterCalls = 0;
+  const options = {};
+  Object.defineProperty(options, 'limit', { enumerable: true, get() { getterCalls += 1; return 5; } });
+  assert.throws(() => searchSemanticGraph(graph, 'Campaign', options), /must contain enumerable data fields only/);
+  assert.equal(getterCalls, 0);
+
+  assert.throws(() => searchSemanticGraph(graph, 'Campaign', { limit: '5' }), /Semantic search limit must be an integer/);
+  assert.throws(() => searchSemanticGraph(graph, 'Campaign', { minimumScore: '1' }), /minimumScore must be a finite non-negative number/);
+  assert.throws(() => createSemanticIndex(graph, { maxTermsPerNode: '32' }), /maxTermsPerNode must be an integer/);
+  assert.throws(() => searchSemanticGraph(graph, 'x'.repeat(MAX_SEMANTIC_QUERY_CHARS + 1)), /Semantic query exceeds 4096 characters/);
+});
+
+test('semantic kind filters require bounded dense string values without coercion', () => {
+  const graph = createGraph('Campaign');
+  let coercions = 0;
+  const forged = { toString() { coercions += 1; return 'project'; } };
+  assert.throws(() => searchSemanticGraph(graph, 'Campaign', { kinds: [forged] }), /Semantic kind must be a non-empty string/);
+  assert.equal(coercions, 0);
+
+  let getterCalls = 0;
+  const kinds = [];
+  Object.defineProperty(kinds, '0', { enumerable: true, get() { getterCalls += 1; return 'project'; } });
+  kinds.length = 1;
+  assert.throws(() => searchSemanticGraph(graph, 'Campaign', { kinds }), /Semantic kinds must contain enumerable data values only/);
+  assert.equal(getterCalls, 0);
 });
