@@ -4,35 +4,29 @@ Media is an experimental unified creative workstation for image, video, audio, a
 
 The architectural thesis remains: **the creative project is the product, not a collection of application-specific files**. Canvas, Cut, Motion, Deliver and Agent are views over one Universal Creative Graph, reversible history and a shared media-kernel contract.
 
-## Current milestone — 0.14
+## Current milestone — 0.15
 
-0.14 moves adaptive fidelity from an additive 0.13 experiment into the **normal Cut composition-preview loop** while preserving the existing graph/evaluation/render contracts.
+0.15 turns the adaptive fidelity values introduced in 0.13 and integrated into Cut in 0.14 into **executable composition quality**.
 
-### Real Cut fidelity loop
+### Executable temporal fidelity
 
-Cut now evaluates a composition once, resolves its true FPS from the evaluated composition identity, chooses a fidelity plan and renders that same evaluated plan through the established composition engine.
+Motion blur is explicit graph state, not a renderer guess. Compositions carry an opt-in shutter policy (`motionBlurEnabled`, shutter angle, phase and weight curve). When it is enabled, the fidelity plan's temporal sample count drives real sub-frame composition evaluation and weighted pixel accumulation. The already-evaluated center sample is reused when present, and stale/aborted work keeps the existing cancellation semantics.
 
-The feedback loop is executable rather than descriptive:
+Scrubbing still collapses to a single sample. Playback can shed temporal work under pressure. Export can request the full reference sample count.
 
-- scrubbing immediately drops to one temporal sample, one vector sample and a reduced preview resolution;
-- normal playback adapts preview resolution plus temporal/vector quality hints from EWMA render cost and recent stale-frame pressure;
-- render outcomes feed the next fidelity decision;
-- export remains full resolution and preserves requested reference quality;
-- switching/invalidation resets performance pressure so one expensive composition does not permanently degrade another.
+### Executable vector fidelity and mask parity
 
-### Cancellation-safe seeking
+Vector masks are now first-class compositing masks. Their signed-distance rasterizer consumes the adaptive vector supersample level, with deterministic feather/invert alpha generation. Canvas2D now applies asset and vector masks instead of silently ignoring mask state, including masked text and shape layers through source-space intrinsic rasterization.
 
-Interactive Cut seeks now cancel the previous scrub request with `AbortController`. Cancelled and failed renders are tracked separately from presented/stale frames and do not poison the fidelity performance model.
+For WebGPU, source-backed vector masks are materialized as source-sized synthetic mask textures after the source frame dimensions are known. The synthetic identity includes shape, source and supersample level so the texture cache cannot reuse a lower-quality or stale matte. Unsupported intrinsic vector-mask GPU cases fall back to the deterministic Canvas path rather than changing semantics.
 
-`CompositionPlaybackEngine.presentEvaluated()` is the new integration seam. It avoids duplicate graph evaluation, applies the fidelity resolution scale to preview width/height/pixel budgets, carries fidelity metadata into both Canvas2D and WebGPU render calls and keeps the existing latest-generation stale-frame guard.
+### Graph-backed Deliver frames
 
-### 0.13 media/runtime foundations remain
+`CompositionFrameRenderer` renders a graph at an exact output time/size using the same mask and temporal fidelity rules. `renderCompositionTimelineExport()` bridges that renderer into the existing WebCodecs MP4/WebM Deliver runtime, including progressive export, so preview/reference rendering and encoded output share the same composition semantics.
 
-The 0.13 MPEG-TS, period-aware DASH, secure codec-plugin and non-contiguous WebCodecs payload paths remain intact. The 0.14 change is deliberately concentrated on product playback integration rather than replacing those parsers/runtimes again.
+## Deliberate 0.15 boundaries
 
-## Deliberate 0.14 boundaries
-
-Preview resolution scaling is active in normal Cut playback. Temporal motion-blur sample counts and vector supersampling are propagated as fidelity hints for the existing reference kernels; they are not yet the default multi-sample real-time compositor. The TS reference path still targets 188-byte MPEG-TS rather than 192-byte M2TS, and broader LATM/MP3/AC-3/E-AC-3 framing, HEVC parameter metadata, DRM/key acquisition and calibrated OS HDR output remain future work.
+The temporal reference path currently accumulates rendered 8-bit RGBA Canvas2D frames; it is a correctness path, not yet a scene-linear HDR GPU temporal accumulator. There is no optical-flow/motion-vector blur. Vector matte supersampling is currently capped at 4x. WebGPU intrinsic vector masks fall back to Canvas2D. The legacy top-level Studio `app.js` still needs to be migrated onto the newer Cut and full timeline Deliver runtime.
 
 ## Run locally
 

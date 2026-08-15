@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.15.0
+
+- Added explicit graph-backed composition shutter policy; motion blur remains disabled by default and is never invented by a fidelity sample-count request.
+- Made temporal fidelity executable through weighted sub-frame composition evaluation and deterministic Canvas2D/CPU RGBA accumulation, reusing the already-evaluated center sample when present.
+- Added first-class vector masks with even-odd/nonzero paths and connected adaptive vector supersampling to the existing signed-distance matte rasterizer.
+- Added Canvas2D asset/vector mask compositing with alpha/luma, inversion, opacity and feather semantics instead of silently ignoring masks.
+- Added intrinsic text/shape source rasterization so masked intrinsic layers use the same transform/effect/mask path as source-backed media.
+- Added a source-backed WebGPU vector-mask adapter that materializes source-sized synthetic mask textures and keys them by source, shape and supersample quality.
+- Added graph-backed `CompositionFrameRenderer` and `renderCompositionTimelineExport()` so Deliver can render the same temporal/vector composition semantics before WebCodecs/muxing.
+- Added abort-aware fallback frame scheduling and tightened temporal/GPU cache correctness around floating-point center samples and source relinks.
+- Validated 47 focused 0.15/compatibility cases while preserving the existing 0.09 composition, 0.10 compositing and 0.13/0.14 fidelity contracts.
+
 ## 0.14.0
 
 - Integrated frame-budget fidelity into the normal Cut composition-preview path instead of leaving it as an isolated scheduling adapter.

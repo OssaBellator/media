@@ -1,0 +1,7 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {intrinsicAnchorForItem,intrinsicRasterDimensions,rasterizeIntrinsicCanvas} from '../intrinsic-raster.js';
+function canvasFactory(width=1,height=1){const context={font:'',fillStyle:'',strokeStyle:'',lineWidth:0,textAlign:'',textBaseline:'',clearRect(){},beginPath(){},ellipse(){},moveTo(){},lineTo(){},quadraticCurveTo(){},closePath(){},fill(){},stroke(){},fillText(){},measureText(text){return{width:String(text).length*10};}};return{width,height,getContext(){return context;}};}
+test('intrinsic text raster preserves alignment through source anchor',()=>{assert.deepEqual(intrinsicAnchorForItem({kind:'text',style:{align:'left'}}),{x:0,y:.5});assert.deepEqual(intrinsicAnchorForItem({kind:'text',style:{align:'right'}}),{x:1,y:.5});});
+test('intrinsic raster dimensions use measured text and shape stroke bounds',()=>{assert.deepEqual(intrinsicRasterDimensions({kind:'text',text:'abc',style:{fontSize:20}},{measureText:()=>({width:42})}),{width:44,height:24});assert.deepEqual(intrinsicRasterDimensions({kind:'shape',shape:{width:100,height:50,strokeWidth:4}}),{width:108,height:58});});
+test('text and shape intrinsic sources materialize Canvas2D drawables',()=>{const text=rasterizeIntrinsicCanvas({kind:'text',text:'Hi',style:{fontSize:20,align:'center'}},{canvasFactory}),shape=rasterizeIntrinsicCanvas({kind:'shape',shape:{type:'ellipse',width:30,height:20,fill:'#fff'}},{canvasFactory});assert.equal(text.width,22);assert.equal(shape.width,30);assert.equal(shape.height,20);});

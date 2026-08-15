@@ -1,4 +1,5 @@
 import { childrenOf, nodesByKind } from './graph.js';
+import { motionBlurPolicyFromComposition } from './fidelity-render.js';
 import { primaryComposition } from './project.js';
 import { clipEnd } from './timeline.js';
 import { evaluateAnimatedTransform } from './keyframes.js';
@@ -88,13 +89,16 @@ export function evaluateComposition(graph, { compositionId, time = 0 } = {}) {
     pan: Number(clip.props.pan ?? 0),
     effects: evaluatedEffects(graph, clip.id),
   }));
+  const fps=Number(composition.props.fps??30);
   return {
     compositionId: composition.id,
     time: Number(time),
-    frame: Math.max(0, Math.round(Number(time) * Number(composition.props.fps ?? 30))),
+    frame: Math.max(0, Math.round(Number(time) * fps)),
+    fps,
     width: Number(composition.props.width),
     height: Number(composition.props.height),
     background: composition.props.background ?? '#000000',
+    motionBlur: motionBlurPolicyFromComposition(composition),
     visual: [...canvasLayers, ...timelineVisuals],
     audio,
   };

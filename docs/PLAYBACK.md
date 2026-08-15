@@ -6,25 +6,33 @@ Source-backed video decode uses range IO, keyframe-safe encoded windows, Worker 
 
 ## Adaptive Cut preview fidelity
 
-0.14 makes the frame-budget fidelity controller part of the normal Cut preview path instead of leaving it as an isolated adapter.
-
-The preview loop is now:
+The preview loop is:
 
 ```text
 composition evaluation
   -> fidelity plan
-  -> preview resolution / temporal / vector quality hints
+  -> preview resolution / temporal / vector quality
   -> composition render
   -> measured render time + stale outcome
   -> next fidelity plan
 ```
 
-`CompositionPlaybackEngine.presentEvaluated()` accepts an already evaluated composition so the fidelity layer does not evaluate the graph twice. The fidelity plan is attached to the scaled render plan and passed through both WebGPU and Canvas2D render calls.
+`CompositionPlaybackEngine.presentEvaluated()` accepts an already evaluated composition so the fidelity layer does not evaluate the graph twice. Preview resolution is enforced immediately: scrubbing uses a reduced resolution, while normal playback scales between the configured minimum and full preview size from EWMA render cost and recent stale-frame pressure.
 
-Preview resolution is enforced immediately: scrubbing uses a reduced resolution, while normal playback scales between the configured minimum and full preview size from EWMA render cost and recent stale-frame pressure. Export fidelity remains full-resolution and preserves requested temporal/vector sample counts.
+## Executable temporal fidelity
 
-Scrub requests use an abortable generation. A newer seek cancels the previous interactive request, while ordinary playback keeps latest-generation commit semantics. Aborted or failed renders are tracked separately and do not pollute the fidelity controller's render-cost EWMA.
+0.15 makes temporal fidelity executable when the composition explicitly enables motion blur. The evaluated composition carries a normalized shutter policy. `temporalSamplesForFidelity()` expands that policy into weighted sub-frame times and `renderTemporalCompositionToCanvas2D()` re-evaluates the graph at those times, renders each sample and accumulates the RGBA result.
 
-Temporal and vector sample counts are currently render-plan hints for the existing reference kernels; they are not yet a claim that multi-sample temporal accumulation or vector supersampling is the default real-time compositor path.
+The center evaluated plan is reused when its timestamp is present in the shutter schedule. Scrub fidelity still uses one sample, so interactive seeking does not accidentally trigger multi-sample work. Motion blur is never inferred from a high sample-count request alone.
 
-The GPU reference path represents blend/mask/transition/intrinsic nodes; unsupported masks/effects/color ingestion still fall back instead of changing creative semantics silently.
+The current temporal accumulator is the deterministic Canvas2D/CPU reference path. It accumulates rendered 8-bit RGBA frames; scene-linear/HDR accumulation and a production GPU temporal resolve remain future optimizations.
+
+## Executable vector fidelity
+
+Vector masks are normalized as first-class mask sources. Their signed-distance matte rasterizer consumes `vectorSupersample` from fidelity, capped at the current 4x reference-kernel limit.
+
+Canvas2D applies both asset and vector masks, including alpha/luma asset masks, invert, opacity and feather. Text and shape items with masks are first rasterized into source-space drawables and then use the same transform/effect/mask path as media assets.
+
+WebGPU source-backed vector masks are adapted to source-sized synthetic mask textures after source dimensions are known. Shape/source/supersample state participates in the synthetic cache identity. Intrinsic vector-mask GPU cases fall back to Canvas2D rather than using incorrect UV alignment.
+
+Scrub requests remain abortable. Aborted/failed renders do not pollute the fidelity controller's render-cost EWMA.

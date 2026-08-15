@@ -1,7 +1,7 @@
 import { addEdge, addNode, createEdge, createGraph, createNode, nodesByKind } from "./graph.js";
 import { createId } from "./id.js";
 
-export const DEFAULT_COMPOSITION = { width: 1920, height: 1080, fps: 30, duration: 30, background: "#090a0d" };
+export const DEFAULT_COMPOSITION = { width: 1920, height: 1080, fps: 30, duration: 30, background: "#090a0d", motionBlurEnabled: false, shutterAngle: 180, shutterPhase: "centered", motionBlurWeightCurve: "box" };
 
 export function createMediaProject(name = "Untitled project") {
   let graph = createGraph(name);

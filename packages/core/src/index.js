@@ -15,6 +15,7 @@ export * from './effects.js';
 export * from './encoded-export.js';
 export * from './encoded-window.js';
 export * from './evaluation.js';
+export * from './fidelity-render.js';
 export * from './gpu-render-graph.js';
 export * from './graph.js';
 export * from './hdr.js';
