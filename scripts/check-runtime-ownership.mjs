@@ -17,11 +17,12 @@ const checks = [
   ['app runtime version constant matches 0.16', /const APP_VERSION = "0\.16\.0";/.test(app)],
   ['Cut compatibility bootstrap removed', !/cut-playback-bootstrap\.js/.test(index)],
   ['delivery compatibility bootstrap removed', !/composition-delivery-bootstrap\.js/.test(index)],
+  ['advanced runtime no longer owns a DOM mutation observer', !/MutationObserver/.test(advanced)],
+  ['advanced runtime exposes an explicit graph-provider seam', /setAdvancedRuntimeGraphProvider/.test(advanced) && /graphProvider/.test(advanced)],
 ];
 
 const remaining = [
-  ['advanced runtime still owns a DOM observer', /new MutationObserver/.test(advanced)],
-  ['advanced runtime still reloads graph state from storage', /loadStoredGraph/.test(advanced)],
+  ['advanced runtime still defaults to reloading graph state from storage', /loadStoredGraph/.test(advanced)],
   ['brand badge still hardcodes the legacy 0.4 label', /<span class="alpha">0\.4<\/span>/.test(view)],
 ];
 
