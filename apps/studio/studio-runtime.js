@@ -63,6 +63,7 @@ import { createCutPlaybackRuntime } from "./cut-playback-runtime.js";
 import { createCompositionDeliveryRuntime } from "./composition-delivery-runtime.js";
 import { BrowserAudioMixer } from "./audio-engine.js";
 import { HistoryJournalSession, recoverHistoryJournalSession } from "./history-journal-session.js";
+import { registerStudioGraphProvider, registerStudioNodeSelector } from "./studio-services.js";
 import { findStoredAssetByHash, loadAssetBlob, loadStoredGraph, loadStoredOperationRecovery, localAssetUri, saveAssetBlob, saveStoredGraph, saveStoredGraphWithOperation, saveStoredGraphWithOperationAndAssets } from "./storage.js";
 
 const APP_VERSION = "0.16.0";
@@ -89,6 +90,13 @@ let transportLastTick = 0;
 let activity = [{ title: "Project created", detail: "Universal Creative Graph ready for image, video and audio assets.", operations: [] }];
 
 const graph = () => history.present;
+registerStudioGraphProvider(graph);
+registerStudioNodeSelector((nodeId) => {
+  if (!graph().nodes[nodeId]) return false;
+  selectedId = nodeId;
+  render();
+  return true;
+});
 const selectedNode = () => graph().nodes[selectedId] ?? graph().nodes[graph().projectId];
 const composition = () => nodesByKind(graph(), "composition")[0];
 const escapeHtml = (value) => String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#039;");
