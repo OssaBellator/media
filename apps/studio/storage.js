@@ -1,6 +1,7 @@
 import { OPERATION_LOG_SCHEMA, operationLogChecksum, validateOperationLog } from '../../packages/core/src/operation-log.js';
 const DB_NAME = "media-studio";
-const DB_VERSION = 3;
+const DB_VERSION = 4;
+const MAX_DERIVED_LIST_RECORDS = 4096;
 const WORKSPACE_KEY = "current";
 let databasePromise = null;
 let currentGraphCache = null;
@@ -14,14 +15,17 @@ export async function openMediaDatabase() {
   if (databasePromise) return databasePromise;
   databasePromise = new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
-    request.onupgradeneeded = () => {
+    request.onupgradeneeded = (event) => {
       const database = request.result;
       if (!database.objectStoreNames.contains("workspace")) database.createObjectStore("workspace", { keyPath: "key" });
       let assets;
       if (!database.objectStoreNames.contains("assets")) assets = database.createObjectStore("assets", { keyPath: "id" }); else assets = request.transaction.objectStore("assets");
       if (!assets.indexNames.contains("hash")) assets.createIndex("hash", "hash", { unique: false });
       if (!assets.indexNames.contains("name")) assets.createIndex("name", "name", { unique: false });
-      if (!database.objectStoreNames.contains("derived")) database.createObjectStore("derived", { keyPath: "key" });
+      let derived;
+      if (!database.objectStoreNames.contains("derived")) derived = database.createObjectStore("derived", { keyPath: "key" }); else derived = request.transaction.objectStore("derived");
+      if (!database.objectStoreNames.contains("derivedMeta")) database.createObjectStore("derivedMeta", { keyPath: "key" });
+      if ((event?.oldVersion ?? 0) < 4) derived.clear();
       let journal;
       if (!database.objectStoreNames.contains("journal")) journal = database.createObjectStore("journal", { keyPath: "sequence" }); else journal = request.transaction.objectStore("journal");
       if (!journal.indexNames.contains("transactionId")) journal.createIndex("transactionId", "transactionId", { unique: true });
@@ -58,10 +62,14 @@ export async function garbageCollectStoredAssets(options={}){const result=await 
 export async function deleteAssetBlob(assetId) { const result=await transaction("assets","readwrite",async(store)=>{store.delete(assetId);return true;});return Boolean(result); }
 export async function listStoredAssetIds() { return (await listStoredAssets()).map((record)=>String(record.id)); }
 export async function hasAssetBlob(assetId) { return (await loadAssetBlob(assetId)) !== null; }
-export async function saveDerivedArtifact(key, value, metadata = {}) { const result=await transaction("derived","readwrite",async(store)=>{store.put({key,value,metadata:{...metadata},savedAt:new Date().toISOString()});return true;});return Boolean(result); }
+function boundedDerivedListLimit(limit=MAX_DERIVED_LIST_RECORDS){if(!Number.isInteger(limit)||limit<1||limit>MAX_DERIVED_LIST_RECORDS)throw new Error(`Derived artifact list limit must be an integer between 1 and ${MAX_DERIVED_LIST_RECORDS}`);return limit;}
+function derivedListPrefix(prefix=""){if(typeof prefix!=="string")throw new Error("Derived artifact list prefix must be a string");return prefix;}
+function derivedListOptions(options={}){if(!options||typeof options!=="object"||Array.isArray(options))throw new Error("Derived artifact list options must be a plain data object");const prototype=Object.getPrototypeOf(options);if(prototype!==Object.prototype&&prototype!==null)throw new Error("Derived artifact list options must be a plain data object");const descriptors=Object.getOwnPropertyDescriptors(options),clean={};for(const key of Reflect.ownKeys(descriptors)){if(typeof key!=="string"||(key!=="prefix"&&key!=="limit"))throw new Error(`Unsupported derived artifact list option: ${String(key)}`);const descriptor=descriptors[key];if(!descriptor.enumerable||!Object.hasOwn(descriptor,"value"))throw new Error("Derived artifact list options must contain enumerable data fields only");clean[key]=descriptor.value;}return{prefix:derivedListPrefix(clean.prefix??""),limit:boundedDerivedListLimit(clean.limit??MAX_DERIVED_LIST_RECORDS)};}
+async function boundedStoreRecords(store,prefix,limit){if(typeof store.openCursor!=="function"){const records=await requestResult(store.getAll())??[];return records.filter((record)=>typeof record?.key==="string"&&record.key.startsWith(prefix)).sort((a,b)=>a.key.localeCompare(b.key)).slice(0,limit);}return new Promise((resolve,reject)=>{const records=[],request=store.openCursor();request.onerror=()=>reject(request.error??new Error("IndexedDB cursor failed"));request.onsuccess=()=>{const cursor=request.result;if(!cursor){resolve(records);return;}const key=typeof cursor.key==="string"?cursor.key:String(cursor.key??"");if((!prefix||key.startsWith(prefix))&&records.length<limit)records.push(cursor.value);if(records.length>=limit){resolve(records);return;}cursor.continue();};});}
+export async function saveDerivedArtifact(key, value, metadata = {}) { const savedAt=new Date().toISOString(),recordMetadata={...metadata};const result=await databaseTransaction(["derived","derivedMeta"],"readwrite",async({derived,derivedMeta})=>{derived.put({key,value,metadata:recordMetadata,savedAt});derivedMeta.put({key,metadata:recordMetadata,savedAt});return true;});return Boolean(result); }
 export async function loadDerivedArtifact(key) { return transaction("derived","readonly",async(store)=>requestResult(store.get(key))); }
-export async function listDerivedArtifacts({prefix="",limit=Infinity}={}){const records=await transaction("derived","readonly",async(store)=>requestResult(store.getAll()))??[];const text=String(prefix);return records.filter((record)=>!text||String(record.key).startsWith(text)).sort((a,b)=>String(a.key).localeCompare(String(b.key))).slice(0,Number.isFinite(Number(limit))?Math.max(0,Number(limit)):records.length);}
-export async function deleteDerivedArtifact(key) { const result=await transaction("derived","readwrite",async(store)=>{store.delete(key);return true;});return Boolean(result); }
-export async function deleteDerivedArtifactsByPrefix(prefix){const keys=(await listDerivedArtifacts({prefix})).map((record)=>record.key);if(!keys.length)return 0;await transaction("derived","readwrite",async(store)=>{for(const key of keys)store.delete(key);return true;});return keys.length;}
-export async function clearDerivedArtifacts() { const result=await transaction("derived","readwrite",async(store)=>{store.clear();return true;});return Boolean(result); }
+export async function listDerivedArtifacts(options={}){const {prefix,limit}=derivedListOptions(options);return await transaction("derivedMeta","readonly",async(store)=>boundedStoreRecords(store,prefix,limit))??[];}
+export async function deleteDerivedArtifact(key) { const result=await databaseTransaction(["derived","derivedMeta"],"readwrite",async({derived,derivedMeta})=>{derived.delete(key);derivedMeta.delete(key);return true;});return Boolean(result); }
+export async function deleteDerivedArtifactsByPrefix(prefix){const text=derivedListPrefix(prefix);let removed=0;for(;;){const keys=(await listDerivedArtifacts({prefix:text,limit:MAX_DERIVED_LIST_RECORDS})).map((record)=>record.key);if(!keys.length)return removed;await databaseTransaction(["derived","derivedMeta"],"readwrite",async({derived,derivedMeta})=>{for(const key of keys){derived.delete(key);derivedMeta.delete(key);}return true;});removed+=keys.length;if(keys.length<MAX_DERIVED_LIST_RECORDS)return removed;}}
+export async function clearDerivedArtifacts() { const result=await databaseTransaction(["derived","derivedMeta"],"readwrite",async({derived,derivedMeta})=>{derived.clear();derivedMeta.clear();return true;});return Boolean(result); }
 export async function estimateStorageQuota(){if(typeof globalThis.navigator?.storage?.estimate!=="function")return null;const result=await globalThis.navigator.storage.estimate();const usage=Number(result?.usage??0),quota=Number(result?.quota??0);return{usage,quota,available:Math.max(0,quota-usage),ratio:quota>0?usage/quota:0};}
