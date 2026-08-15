@@ -1,6 +1,6 @@
 import { createAgentPlan } from "./agent-plan.js";
 import { createAgentWorkflow, MAX_AGENT_WORKFLOW_BYTES, MAX_AGENT_WORKFLOW_TASKS } from "./agent-workflow.js";
-import { normalizeBoundedModelJsonObject } from "./model-input.js";
+import { normalizeBoundedModelInput, normalizeBoundedModelJsonObject } from "./model-input.js";
 import { canonicalOperationLogJson } from "./operation-log.js";
 import { assertValidOperation } from "./operations.js";
 import { planIntent } from "./planner.js";
@@ -12,6 +12,13 @@ export const MAX_PLANNER_INTENT_CHARS = 16_384;
 export const DEFAULT_PLANNER_RESULT_BYTES = 2 * 1024 * 1024;
 export const DEFAULT_PLANNER_REQUEST_BYTES = 4 * 1024 * 1024;
 export const DEFAULT_PLANNER_CONTEXT_BYTES = 64 * 1024;
+export const MAX_PLANNER_PROVIDER_ID_CHARS = 160;
+export const MAX_PLANNER_PROVIDER_LABEL_CHARS = 256;
+export const MAX_PLANNER_PROVIDER_CAPABILITIES = 32;
+export const MAX_PLANNER_PROVIDER_CAPABILITY_CHARS = 64;
+export const MAX_PLANNER_PROVIDERS = 256;
+const PLANNER_PROVIDER_KEYS = new Set(["id", "label", "capabilities", "plan"]);
+const WORKFLOW_PROVIDER_KEYS = new Set(["id", "label", "capabilities", "proposeWorkflow"]);
 
 function utf8Bytes(text) { return new TextEncoder().encode(text).byteLength; }
 export function normalizePlannerIntent(intent, label = "Planner intent") {
@@ -28,18 +35,40 @@ function boundedPositive(value, fallback, minimum = 256) {
   const number = Number(value);
   return Number.isFinite(number) && number >= minimum ? Math.floor(number) : fallback;
 }
-function requireProvider(provider) {
-  if (!provider || typeof provider !== "object") throw new Error("Planner provider must be an object");
-  if (typeof provider.id !== "string" || !provider.id) throw new Error("Planner provider requires an id");
-  if (typeof provider.plan !== "function") throw new Error(`Planner provider ${provider.id} requires a plan function`);
-  return provider;
+function boundedProviderString(value, label, maxChars) {
+  if (typeof value !== "string" || !value.trim()) throw new Error(`${label} must be a non-empty string`);
+  const clean = value.trim();
+  if (clean.length > maxChars) throw new Error(`${label} exceeds ${maxChars} characters`);
+  return clean;
 }
-function requireWorkflowProvider(provider) {
-  if (!provider || typeof provider !== "object") throw new Error("Workflow provider must be an object");
-  if (typeof provider.id !== "string" || !provider.id) throw new Error("Workflow provider requires an id");
-  if (typeof provider.proposeWorkflow !== "function") throw new Error(`Workflow provider ${provider.id} requires a proposeWorkflow function`);
-  return provider;
+function normalizeProviderCapabilities(value, fallback, label) {
+  const clean = normalizeBoundedModelInput(value ?? fallback, `${label} capabilities`, { maxBytes: 4096, maxDepth: 2, maxEntries: MAX_PLANNER_PROVIDER_CAPABILITIES, allowBinary: false });
+  if (!Array.isArray(clean)) throw new Error(`${label} capabilities must be an array`);
+  return [...new Set(clean.map((capability) => boundedProviderString(capability, `${label} capability`, MAX_PLANNER_PROVIDER_CAPABILITY_CHARS)))];
 }
+function normalizeProviderDescriptor(provider, { workflow = false } = {}) {
+  const label = workflow ? "Workflow provider" : "Planner provider";
+  if (!provider || typeof provider !== "object" || Array.isArray(provider)) throw new Error(`${label} must be an object`);
+  const prototype = Object.getPrototypeOf(provider);
+  if (prototype !== Object.prototype && prototype !== null) throw new Error(`${label} must be a plain data object`);
+  const keys = workflow ? WORKFLOW_PROVIDER_KEYS : PLANNER_PROVIDER_KEYS;
+  const descriptors = Object.getOwnPropertyDescriptors(provider);
+  const clean = {};
+  for (const key of Reflect.ownKeys(descriptors)) {
+    if (typeof key !== "string" || !keys.has(key)) throw new Error(`Unsupported ${label.toLowerCase()} field: ${String(key)}`);
+    const descriptor = descriptors[key];
+    if (!descriptor.enumerable || !("value" in descriptor)) throw new Error(`${label} must contain enumerable data fields only`);
+    clean[key] = descriptor.value;
+  }
+  const id = boundedProviderString(clean.id, `${label} id`, MAX_PLANNER_PROVIDER_ID_CHARS);
+  const providerLabel = clean.label === undefined ? id : boundedProviderString(clean.label, `${label} label`, MAX_PLANNER_PROVIDER_LABEL_CHARS);
+  const capabilities = Object.freeze(normalizeProviderCapabilities(clean.capabilities, [workflow ? "workflow" : "plan"], label));
+  const method = workflow ? clean.proposeWorkflow : clean.plan;
+  if (typeof method !== "function") throw new Error(`${label} ${id} requires a ${workflow ? "proposeWorkflow" : "plan"} function`);
+  return Object.freeze({ id, label: providerLabel, capabilities, [workflow ? "proposeWorkflow" : "plan"]: method });
+}
+function requireProvider(provider) { return normalizeProviderDescriptor(provider); }
+function requireWorkflowProvider(provider) { return normalizeProviderDescriptor(provider, { workflow: true }); }
 
 export function assertPlannerResult(result, { maxResultBytes = DEFAULT_PLANNER_RESULT_BYTES } = {}) {
   if (!result || typeof result !== "object" || Array.isArray(result)) throw new Error("Planner result must be an object");
@@ -60,8 +89,8 @@ export function assertPlannerResult(result, { maxResultBytes = DEFAULT_PLANNER_R
   return JSON.parse(canonical);
 }
 
-export function createPlannerProvider({ id, label = id, capabilities = ["plan"], plan }) {
-  return requireProvider({ id, label, capabilities: [...capabilities], plan });
+export function createPlannerProvider(config = {}) {
+  return requireProvider(config);
 }
 
 export function assertWorkflowPlannerResult(result, { maxResultBytes = MAX_AGENT_WORKFLOW_BYTES } = {}) {
@@ -77,8 +106,8 @@ export function assertWorkflowPlannerResult(result, { maxResultBytes = MAX_AGENT
   return JSON.parse(canonical);
 }
 
-export function createWorkflowPlannerProvider({ id, label = id, capabilities = ["workflow"], proposeWorkflow }) {
-  return requireWorkflowProvider({ id, label, capabilities: [...capabilities], proposeWorkflow });
+export function createWorkflowPlannerProvider(config = {}) {
+  return requireWorkflowProvider(config);
 }
 
 export async function proposeAgentWorkflowWithProvider(provider, graph, intent, context = {}, options = {}) {
@@ -212,7 +241,12 @@ export function createModelRouterWorkflowProvider({
 
 export class PlannerRegistry {
   #providers = new Map();
-  register(provider) { const valid = requireProvider(provider); this.#providers.set(valid.id, valid); return this; }
+  register(provider) {
+    const valid = requireProvider(provider);
+    if (!this.#providers.has(valid.id) && this.#providers.size >= MAX_PLANNER_PROVIDERS) throw new Error(`Planner registry exceeds ${MAX_PLANNER_PROVIDERS} providers`);
+    this.#providers.set(valid.id, valid);
+    return this;
+  }
   unregister(id) { return this.#providers.delete(id); }
   get(id) { return this.#providers.get(id) ?? null; }
   list() { return [...this.#providers.values()]; }

@@ -125,3 +125,14 @@ test('workflow planner result normalization rejects accessors without executing 
   assert.throws(() => assertWorkflowPlannerResult(result), /Workflow planner result must be JSON-safe/i);
   assert.equal(getterCalls, 0);
 });
+
+
+test('workflow provider descriptors reject accessors without executing them', async () => {
+  let getterCalls = 0;
+  const provider = { proposeWorkflow: async () => ({ summary: 'noop', operations: [], tasks: [] }) };
+  Object.defineProperty(provider, 'id', { enumerable: true, get() { getterCalls += 1; return 'unsafe'; } });
+  assert.throws(() => createWorkflowPlannerProvider(provider), /enumerable data fields only/);
+  assert.equal(getterCalls, 0);
+  await assert.rejects(() => proposeAgentWorkflowWithProvider(provider, createGraph('Raw workflow provider'), 'delegate'), /enumerable data fields only/);
+  assert.equal(getterCalls, 0);
+});

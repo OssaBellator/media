@@ -2,6 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   MAX_PLANNER_INTENT_CHARS,
+  MAX_PLANNER_PROVIDER_CAPABILITIES,
+  MAX_PLANNER_PROVIDER_CAPABILITY_CHARS,
+  MAX_PLANNER_PROVIDER_ID_CHARS,
+  MAX_PLANNER_PROVIDER_LABEL_CHARS,
+  MAX_PLANNER_PROVIDERS,
   PlannerRegistry,
   createHttpPlannerProvider,
   createLocalPlannerProvider,
@@ -134,4 +139,41 @@ test("planner result normalization rejects accessors without executing them", as
   const nestedProvider = createPlannerProvider({ id: "nested-accessor", plan: async () => ({ summary: "unsafe", operations: [operation] }) });
   await assert.rejects(() => planWithProvider(nestedProvider, createMediaProject(), "inspect"), /Planner result must be JSON-safe/i);
   assert.equal(nestedGetterCalls, 0);
+});
+
+
+test("planner provider descriptors reject accessors and coercive fields without executing them", async () => {
+  let idGetterCalls = 0;
+  const accessor = { plan: async () => ({ summary: "noop", operations: [] }) };
+  Object.defineProperty(accessor, "id", { enumerable: true, get() { idGetterCalls += 1; return "unsafe"; } });
+  assert.throws(() => createPlannerProvider(accessor), /enumerable data fields only/);
+  assert.equal(idGetterCalls, 0);
+  await assert.rejects(() => planWithProvider(accessor, createMediaProject(), "inspect"), /enumerable data fields only/);
+  assert.equal(idGetterCalls, 0);
+
+  assert.throws(() => createPlannerProvider({ id: "x".repeat(MAX_PLANNER_PROVIDER_ID_CHARS + 1), plan() {} }), /id exceeds 160 characters/);
+  assert.throws(() => createPlannerProvider({ id: "x", label: "l".repeat(MAX_PLANNER_PROVIDER_LABEL_CHARS + 1), plan() {} }), /label exceeds 256 characters/);
+  assert.throws(() => createPlannerProvider({ id: "x", capabilities: ["c".repeat(MAX_PLANNER_PROVIDER_CAPABILITY_CHARS + 1)], plan() {} }), /capability exceeds 64 characters/);
+  assert.throws(() => createPlannerProvider({ id: "x", capabilities: Array.from({ length: MAX_PLANNER_PROVIDER_CAPABILITIES + 1 }, (_, index) => `c-${index}`), plan() {} }), /exceeds 32 entries/);
+  assert.throws(() => createPlannerProvider({ id: "x", capabilities: ["plan"], metadata: {}, plan() {} }), /Unsupported planner provider field: metadata/);
+});
+
+test("planner provider normalization freezes bounded descriptors and registry cardinality", () => {
+  const sourceCapabilities = ["plan", "offline", "plan"];
+  const provider = createPlannerProvider({ id: "  safe  ", label: "  Safe planner  ", capabilities: sourceCapabilities, plan: async () => ({ summary: "noop", operations: [] }) });
+  assert.equal(provider.id, "safe");
+  assert.equal(provider.label, "Safe planner");
+  assert.deepEqual(provider.capabilities, ["plan", "offline"]);
+  assert.equal(Object.isFrozen(provider), true);
+  assert.equal(Object.isFrozen(provider.capabilities), true);
+  sourceCapabilities.push("changed");
+  assert.deepEqual(provider.capabilities, ["plan", "offline"]);
+
+  const registry = new PlannerRegistry();
+  for (let index = 0; index < MAX_PLANNER_PROVIDERS; index += 1) registry.register({ id: `provider-${index}`, plan: async () => ({ summary: "noop", operations: [] }) });
+  assert.equal(registry.list().length, MAX_PLANNER_PROVIDERS);
+  assert.throws(() => registry.register({ id: "overflow", plan: async () => ({ summary: "noop", operations: [] }) }), /exceeds 256 providers/);
+  assert.doesNotThrow(() => registry.register({ id: "provider-0", label: "Replacement", plan: async () => ({ summary: "noop", operations: [] }) }));
+  assert.equal(registry.get("provider-0").label, "Replacement");
+  assert.equal(registry.list().length, MAX_PLANNER_PROVIDERS);
 });
