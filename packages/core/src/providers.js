@@ -2,6 +2,7 @@ import { createAgentPlan } from "./agent-plan.js";
 import { canonicalOperationLogJson } from "./operation-log.js";
 import { assertValidOperation } from "./operations.js";
 import { planIntent } from "./planner.js";
+import { searchSemanticGraph } from "./semantic-search.js";
 
 export const MAX_PLANNER_OPERATIONS = 2048;
 export const MAX_PLANNER_SUMMARY_CHARS = 4096;
@@ -76,10 +77,41 @@ function plannerObjectModelAccess(node) {
   const access = node.props?.permissions?.modelAccess ?? "full";
   return ["full", "metadata", "none"].includes(access) ? access : "none";
 }
+function plannerVisibleNodeIds(graph) {
+  return new Set(Object.values(graph.nodes).filter((node) => plannerObjectModelAccess(node) !== "none").map((node) => node.id));
+}
+function focusedPlannerNodeIds(graph, visible, focusNodeIds, { neighborDepth = 0, maxNodes = 256 } = {}) {
+  const limit = Math.max(1, Math.min(4096, Math.round(Number(maxNodes) || 256)));
+  const included = new Set();
+  if (visible.has(graph.projectId)) included.add(graph.projectId);
+  let frontier = [...new Set((focusNodeIds ?? []).map(String))].filter((id) => visible.has(id)).sort();
+  for (const id of frontier) {
+    if (included.size >= limit) break;
+    included.add(id);
+  }
+  const edges = Object.values(graph.edges).sort((a, b) => a.id.localeCompare(b.id));
+  const depth = Math.max(0, Math.min(4, Math.round(Number(neighborDepth) || 0)));
+  for (let level = 0; level < depth && frontier.length && included.size < limit; level += 1) {
+    const next = new Set();
+    const expandable = new Set(frontier.filter((id) => id !== graph.projectId));
+    for (const edge of edges) {
+      let candidate = null;
+      if (expandable.has(edge.from)) candidate = edge.to;
+      else if (expandable.has(edge.to)) candidate = edge.from;
+      if (!candidate || !visible.has(candidate) || included.has(candidate)) continue;
+      included.add(candidate);
+      if (candidate !== graph.projectId) next.add(candidate);
+      if (included.size >= limit) break;
+    }
+    frontier = [...next].sort();
+  }
+  return included;
+}
 
-export function createPlannerSnapshot(graph) {
-  const hiddenNodeIds = new Set(Object.values(graph.nodes).filter((node) => plannerObjectModelAccess(node) === "none").map((node) => node.id));
-  const nodes = Object.fromEntries(Object.entries(graph.nodes).filter(([id]) => !hiddenNodeIds.has(id)).map(([id, node]) => {
+export function createPlannerSnapshot(graph, { focusNodeIds = null, neighborDepth = 0, maxNodes = 256 } = {}) {
+  const visible = plannerVisibleNodeIds(graph);
+  const included = focusNodeIds == null ? visible : focusedPlannerNodeIds(graph, visible, focusNodeIds, { neighborDepth, maxNodes });
+  const nodes = Object.fromEntries(Object.entries(graph.nodes).filter(([id]) => included.has(id)).map(([id, node]) => {
     const props = { ...(node.props ?? {}) };
     if (node.kind === "asset") {
       delete props.uri;
@@ -94,8 +126,16 @@ export function createPlannerSnapshot(graph) {
     }
     return [id, { id: node.id, kind: node.kind, name: node.name, props }];
   }));
-  const edges = Object.fromEntries(Object.entries(graph.edges).filter(([, edge]) => !hiddenNodeIds.has(edge.from) && !hiddenNodeIds.has(edge.to)).map(([id, edge]) => [id, { id: edge.id, from: edge.from, to: edge.to, type: edge.type, props: { ...(edge.props ?? {}) } }]));
+  const edges = Object.fromEntries(Object.entries(graph.edges).filter(([, edge]) => included.has(edge.from) && included.has(edge.to)).map(([id, edge]) => [id, { id: edge.id, from: edge.from, to: edge.to, type: edge.type, props: { ...(edge.props ?? {}) } }]));
   return { version: graph.version, projectId: graph.projectId, nodes, edges };
+}
+
+export function createPlannerSemanticContext(graph, intent, { limit = 12, neighborDepth = 1, maxNodes = 256, kinds = null } = {}) {
+  const safeGraph = createPlannerSnapshot(graph);
+  const matches = searchSemanticGraph(safeGraph, intent, { limit, kinds });
+  const snapshot = createPlannerSnapshot(graph, { focusNodeIds: matches.map((match) => match.id), neighborDepth, maxNodes });
+  const included = new Set(Object.keys(snapshot.nodes));
+  return { graph: snapshot, matches: matches.filter((match) => included.has(match.id)) };
 }
 
 async function readBoundedPlannerResponse(response, maxBytes) {
