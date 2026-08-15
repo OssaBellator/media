@@ -1,4 +1,4 @@
-import { normalizeBoundedModelJsonObject } from './model-input.js';
+import { normalizeBoundedModelInput, normalizeBoundedModelJsonObject } from './model-input.js';
 
 export const MODEL_OPERATIONS = Object.freeze([
   'plan', 'plan-workflow', 'embed', 'analyze-media', 'generate-image', 'edit-image', 'generate-video', 'edit-video',
@@ -8,24 +8,52 @@ export const MODEL_DATA_POLICIES = Object.freeze(['any', 'trusted', 'local']);
 export const MAX_MODEL_ROUTING_BACKEND_IDS = 256;
 export const MAX_MODEL_ROUTING_BACKEND_ID_CHARS = 160;
 export const MAX_MODEL_ROUTER_OPTIONS_BYTES = 64 * 1024;
+export const MAX_MODEL_BACKEND_LABEL_CHARS = 256;
+export const MAX_MODEL_BACKEND_METADATA_BYTES = 64 * 1024;
 const MODEL_OPERATION_SET = new Set(MODEL_OPERATIONS);
 const MODEL_DATA_POLICY_SET = new Set(MODEL_DATA_POLICIES);
 const MODEL_ROUTING_POLICY_KEYS = new Set(['allowedBackendIds', 'deniedBackendIds', 'maxCostTier', 'dataPolicy', 'preferLocal']);
+const MODEL_BACKEND_DESCRIPTOR_KEYS = new Set(['id', 'label', 'operations', 'priority', 'location', 'trusted', 'costTier', 'metadata', 'invoke']);
 
 function requireString(value, label) {
   if (typeof value !== 'string' || !value.trim()) throw new Error(`${label} must be a non-empty string`);
   return value.trim();
 }
+function requireBoundedString(value, label, maxChars) {
+  const clean = requireString(value, label);
+  if (clean.length > maxChars) throw new Error(`${label} exceeds ${maxChars} characters`);
+  return clean;
+}
 function normalizeOperations(operations) {
   if (!Array.isArray(operations) || !operations.length) throw new Error('Model backend requires operations');
-  const normalized = [...new Set(operations.map((operation) => requireString(operation, 'Model operation')))];
+  const clean = normalizeBoundedModelInput(operations, 'Model backend operations', { maxBytes: 4096, maxDepth: 2, maxEntries: MODEL_OPERATIONS.length, allowBinary: false });
+  const normalized = [...new Set(clean.map((operation) => requireString(operation, 'Model operation')))];
   for (const operation of normalized) if (!MODEL_OPERATION_SET.has(operation)) throw new Error(`Unsupported model operation: ${operation}`);
   return normalized;
 }
-function normalizeCostTier(value) {
-  const number = Number(value ?? 0);
-  if (!Number.isInteger(number) || number < 0 || number > 3) throw new Error('Model backend costTier must be an integer from 0 to 3');
-  return number;
+function normalizeCostTier(value = 0) {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > 3) throw new Error('Model backend costTier must be an integer from 0 to 3');
+  return value;
+}
+function normalizeBackendDescriptor(config) {
+  if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('Model backend descriptor must be an object');
+  const prototype = Object.getPrototypeOf(config);
+  if (prototype !== Object.prototype && prototype !== null) throw new Error('Model backend descriptor must be a plain data object');
+  const descriptors = Object.getOwnPropertyDescriptors(config);
+  const clean = {};
+  for (const key of Reflect.ownKeys(descriptors)) {
+    if (typeof key !== 'string') throw new Error('Model backend descriptor cannot contain symbol fields');
+    if (!MODEL_BACKEND_DESCRIPTOR_KEYS.has(key)) throw new Error(`Unsupported model backend field: ${key}`);
+    const descriptor = descriptors[key];
+    if (!descriptor.enumerable || !('value' in descriptor)) throw new Error('Model backend descriptor must contain enumerable data fields only');
+    Object.defineProperty(clean, key, { value: descriptor.value, enumerable: true, writable: true, configurable: true });
+  }
+  return clean;
+}
+function deepFreezeJson(value) {
+  if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value;
+  for (const child of Object.values(value)) deepFreezeJson(child);
+  return Object.freeze(value);
 }
 function normalizeDataPolicy(value = 'any') {
   if (!MODEL_DATA_POLICY_SET.has(value)) throw new Error(`Unsupported model data policy: ${value}`);
@@ -88,30 +116,29 @@ export function unsupportedModelResult(reason = 'unsupported') {
   return { supported: false, reason: String(reason) };
 }
 
-export function createModelBackend({
-  id,
-  label = id,
-  operations,
-  priority = 0,
-  location = 'remote',
-  trusted = false,
-  costTier = 0,
-  metadata = {},
-  invoke,
-} = {}) {
-  const backendId = requireString(id, 'Model backend id');
+export function createModelBackend(config = {}) {
+  const clean = normalizeBackendDescriptor(config);
+  const backendId = requireBoundedString(clean.id, 'Model backend id', MAX_MODEL_ROUTING_BACKEND_ID_CHARS);
+  const label = clean.label === undefined ? backendId : requireBoundedString(clean.label, 'Model backend label', MAX_MODEL_BACKEND_LABEL_CHARS);
+  const priority = clean.priority ?? 0;
+  const location = clean.location ?? 'remote';
+  const trusted = clean.trusted ?? false;
+  const costTier = clean.costTier ?? 0;
+  const metadata = normalizeBoundedModelJsonObject(clean.metadata ?? {}, 'Model backend metadata', { maxBytes: MAX_MODEL_BACKEND_METADATA_BYTES });
+  if (typeof priority !== 'number' || !Number.isFinite(priority)) throw new Error('Model backend priority must be a finite number');
   if (!['local', 'remote'].includes(location)) throw new Error(`Unsupported model backend location: ${location}`);
-  if (typeof invoke !== 'function') throw new Error(`Model backend ${backendId} requires invoke`);
+  if (typeof trusted !== 'boolean') throw new Error('Model backend trusted must be a boolean');
+  if (typeof clean.invoke !== 'function') throw new Error(`Model backend ${backendId} requires invoke`);
   return Object.freeze({
     id: backendId,
-    label: String(label ?? backendId),
-    operations: Object.freeze(normalizeOperations(operations)),
-    priority: Number(priority) || 0,
+    label,
+    operations: Object.freeze(normalizeOperations(clean.operations)),
+    priority,
     location,
-    trusted: location === 'local' ? true : Boolean(trusted),
+    trusted: location === 'local' ? true : trusted,
     costTier: normalizeCostTier(costTier),
-    metadata: Object.freeze({ ...metadata }),
-    invoke,
+    metadata: deepFreezeJson(metadata),
+    invoke: clean.invoke,
   });
 }
 

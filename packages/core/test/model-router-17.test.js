@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  MAX_MODEL_BACKEND_LABEL_CHARS,
+  MAX_MODEL_BACKEND_METADATA_BYTES,
   MAX_MODEL_ROUTER_OPTIONS_BYTES,
   MAX_MODEL_ROUTING_BACKEND_ID_CHARS,
   MAX_MODEL_ROUTING_BACKEND_IDS,
@@ -108,4 +110,53 @@ test('model router honors abort before backend invocation', async () => {
 test('model backend validation rejects unknown operations and invalid cost tiers', () => {
   assert.throws(() => createModelBackend({ id: 'x', operations: ['teleport'], invoke() {} }), /Unsupported model operation/);
   assert.throws(() => createModelBackend({ id: 'x', operations: ['plan'], costTier: 4, invoke() {} }), /costTier/);
+  assert.throws(() => createModelBackend({ id: 'x', operations: ['plan'], costTier: '1', invoke() {} }), /costTier/);
+});
+
+test('model backend descriptor rejects accessors, coercive scalars and unknown fields without executing them', () => {
+  let descriptorGetterCalls = 0;
+  const descriptor = { operations: ['plan'], invoke() {} };
+  Object.defineProperty(descriptor, 'id', { enumerable: true, get() { descriptorGetterCalls += 1; return 'unsafe'; } });
+  assert.throws(() => createModelBackend(descriptor), /enumerable data fields only/);
+  assert.equal(descriptorGetterCalls, 0);
+
+  let operationGetterCalls = 0;
+  const operations = [];
+  Object.defineProperty(operations, '0', { enumerable: true, get() { operationGetterCalls += 1; return 'plan'; } });
+  operations.length = 1;
+  assert.throws(() => createModelBackend({ id: 'x', operations, invoke() {} }), /dense data arrays/);
+  assert.equal(operationGetterCalls, 0);
+
+  let labelCoercions = 0;
+  const label = { toString() { labelCoercions += 1; return 'unsafe'; } };
+  assert.throws(() => createModelBackend({ id: 'x', label, operations: ['plan'], invoke() {} }), /label must be a non-empty string/);
+  assert.equal(labelCoercions, 0);
+  assert.throws(() => createModelBackend({ id: 'x', operations: ['plan'], priority: '10', invoke() {} }), /priority must be a finite number/);
+  assert.throws(() => createModelBackend({ id: 'x', operations: ['plan'], priority: Infinity, invoke() {} }), /priority must be a finite number/);
+  assert.throws(() => createModelBackend({ id: 'x', operations: ['plan'], trusted: 'false', invoke() {} }), /trusted must be a boolean/);
+  assert.throws(() => createModelBackend({ id: 'x', operations: ['plan'], preferLocal: true, invoke() {} }), /Unsupported model backend field: preferLocal/);
+});
+
+test('model backend descriptor bounds identity and metadata and exposes only detached frozen metadata', () => {
+  assert.throws(() => createModelBackend({ id: 'x'.repeat(MAX_MODEL_ROUTING_BACKEND_ID_CHARS + 1), operations: ['plan'], invoke() {} }), /id exceeds 160 characters/);
+  assert.throws(() => createModelBackend({ id: 'x', label: 'l'.repeat(MAX_MODEL_BACKEND_LABEL_CHARS + 1), operations: ['plan'], invoke() {} }), /label exceeds 256 characters/);
+  assert.throws(() => createModelBackend({ id: 'x', operations: ['plan'], metadata: { huge: 'm'.repeat(MAX_MODEL_BACKEND_METADATA_BYTES + 1) }, invoke() {} }), /metadata.*exceeds 65536 bytes/);
+
+  let metadataGetterCalls = 0;
+  const unsafeMetadata = {};
+  Object.defineProperty(unsafeMetadata, 'secret', { enumerable: true, get() { metadataGetterCalls += 1; return 'leak'; } });
+  assert.throws(() => createModelBackend({ id: 'x', operations: ['plan'], metadata: unsafeMetadata, invoke() {} }), /metadata must be JSON-safe/);
+  assert.equal(metadataGetterCalls, 0);
+
+  const metadata = { family: 'local', nested: { version: 1 }, tags: ['fast'] };
+  const backend = createModelBackend({ id: 'safe', operations: ['plan'], metadata, invoke() {} });
+  assert.deepEqual(backend.metadata, metadata);
+  assert.notEqual(backend.metadata, metadata);
+  assert.notEqual(backend.metadata.nested, metadata.nested);
+  assert.equal(Object.isFrozen(backend.metadata), true);
+  assert.equal(Object.isFrozen(backend.metadata.nested), true);
+  assert.equal(Object.isFrozen(backend.metadata.tags), true);
+  metadata.nested.version = 2;
+  metadata.tags.push('changed');
+  assert.deepEqual(backend.metadata, { family: 'local', nested: { version: 1 }, tags: ['fast'] });
 });
