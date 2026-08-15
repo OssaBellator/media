@@ -21,6 +21,7 @@
 - Cut temporal motion blur scheduled on WebGPU with pre-final linear `rgba16float` working-texture accumulation, per-sample vector-mask adaptation, one post-accumulation HDR tone-map pass and deterministic Canvas fallback;
 - vector matte signed-distance/feather reference rasterization;
 - MP4 scale projection, bounded per-track chunk planning wired into streaming final-writer interleave/`stsc`/`co64` layout, explicit three-day stress projection and longitudinal conformance history;
+- Studio brand/version badge sourced from the application version instead of a legacy hardcoded `0.4`;
 - Cut and composition-delivery runtime sessions with direct in-memory graph ownership in Studio;
 - deterministic checksummed operation-log primitives plus atomic IndexedDB graph/journal checkpoints and recovery validation;
 - serialized Studio `ProjectJournalSession` plus `HistoryJournalSession`, wired into `app.js` for persistence-first edit/Agent/undo/redo/import/project-open recovery;
@@ -36,4 +37,4 @@
 2. platform color management, display calibration and actual HDR swap-chain/output surfaces;
 3. ship real signed native/WASM codec distributions and deployment key-management policy on top of the verified package format;
 4. larger encrypted/adaptive real-media corpus plus HLS/DASH live lab fixtures;
-5. replace the legacy visible `0.4` badge with the 0.16 app version, then begin authenticated collaboration and distributed render execution.
+5. begin authenticated collaboration and distributed render execution.
