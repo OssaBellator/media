@@ -1,8 +1,8 @@
 import { createId } from "./id.js";
 
 export const GRAPH_VERSION = 1;
-export const NODE_KINDS = Object.freeze(["project", "asset", "composition", "track", "clip", "layer", "effect", "output"]);
-export const EDGE_TYPES = Object.freeze(["contains", "references", "derives-from", "synchronizes", "targets"]);
+export const NODE_KINDS = Object.freeze(["project", "asset", "composition", "track", "clip", "layer", "effect", "output", "object"]);
+export const EDGE_TYPES = Object.freeze(["contains", "references", "derives-from", "synchronizes", "targets", "relates-to"]);
 const NODE_KIND_SET = new Set(NODE_KINDS);
 const EDGE_TYPE_SET = new Set(EDGE_TYPES);
 
@@ -23,7 +23,7 @@ export function createGraph(projectName = "Untitled project") {
 
 export function addNode(graph, node) {
   if (graph.nodes[node.id]) throw new Error(`Node already exists: ${node.id}`);
-  return { ...graph, nodes: { ...graph.nodes, [node.id]: node } };
+  return { ...graph, nodes: { ...graph.nodes, [node.id]: node };
 }
 
 export function updateNode(graph, nodeId, patch) {

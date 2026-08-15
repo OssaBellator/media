@@ -5,6 +5,7 @@ const EPSILON = 0.001;
 function finite(value) { return Number.isFinite(Number(value)); }
 function positive(value) { return finite(value) && Number(value) > 0; }
 function nonNegative(value) { return finite(value) && Number(value) >= 0; }
+function record(value) { return Boolean(value) && typeof value === "object" && !Array.isArray(value); }
 
 export function collectInvariantViolations(graph) {
   const violations = [];
@@ -24,6 +25,38 @@ export function collectInvariantViolations(graph) {
     if (!["visual", "audio"].includes(track.props.mediaKind)) violations.push({ code: "track.media-kind", nodeId: track.id, message: `Track ${track.id} has unsupported mediaKind ${track.props.mediaKind}` });
     const parents = edgesTo(graph, track.id, "contains").map((edge) => graph.nodes[edge.from]).filter((node) => node?.kind === "composition");
     if (parents.length !== 1) violations.push({ code: "track.parent", nodeId: track.id, message: `Track ${track.id} must belong to exactly one composition` });
+  }
+
+  for (const object of nodesByKind(graph, "object")) {
+    if (object.props.creativeObjectSchema !== "media.creative-object.v1") violations.push({ code: "object.schema", nodeId: object.id, message: `Creative object ${object.id} has an unsupported schema` });
+    if (typeof object.props.objectType !== "string" || !object.props.objectType.trim()) violations.push({ code: "object.type", nodeId: object.id, message: `Creative object ${object.id} requires an objectType` });
+    if (object.props.semanticId != null && (typeof object.props.semanticId !== "string" || !object.props.semanticId.trim())) violations.push({ code: "object.semantic-id", nodeId: object.id, message: `Creative object ${object.id} has an invalid semanticId` });
+    if (object.props.confidence != null && (!finite(object.props.confidence) || Number(object.props.confidence) < 0 || Number(object.props.confidence) > 1)) violations.push({ code: "object.confidence", nodeId: object.id, message: `Creative object ${object.id} confidence must be between 0 and 1` });
+    if (!Array.isArray(object.props.tags) || object.props.tags.some((tag) => typeof tag !== "string" || !tag.trim())) violations.push({ code: "object.tags", nodeId: object.id, message: `Creative object ${object.id} tags must be non-empty strings` });
+    for (const key of ["semantics", "provenance", "permissions", "attributes"]) if (!record(object.props[key])) violations.push({ code: `object.${key}`, nodeId: object.id, message: `Creative object ${object.id} ${key} must be an object` });
+    if (!Array.isArray(object.props.generationHistory)) violations.push({ code: "object.generation-history", nodeId: object.id, message: `Creative object ${object.id} generationHistory must be an array` });
+    const containmentParents = edgesTo(graph, object.id, "contains").map((edge) => graph.nodes[edge.from]).filter(Boolean);
+    const parents = containmentParents.filter((node) => ["project", "object"].includes(node.kind));
+    if (containmentParents.length !== 1 || parents.length !== 1) violations.push({ code: "object.parent", nodeId: object.id, message: `Creative object ${object.id} must have exactly one project/object parent` });
+    const seen = new Set([object.id]);
+    let cursor = parents[0];
+    while (cursor?.kind === "object") {
+      if (seen.has(cursor.id)) {
+        violations.push({ code: "object.hierarchy-cycle", nodeId: object.id, message: `Creative object ${object.id} containment hierarchy contains a cycle` });
+        break;
+      }
+      seen.add(cursor.id);
+      const nextParents = edgesTo(graph, cursor.id, "contains").map((edge) => graph.nodes[edge.from]).filter((node) => node && ["project", "object"].includes(node.kind));
+      if (nextParents.length !== 1) break;
+      cursor = nextParents[0];
+    }
+  }
+
+  for (const edge of Object.values(graph.edges).filter((edge) => edge.type === "relates-to")) {
+    if (graph.nodes[edge.from]?.kind !== "object") violations.push({ code: "object.relationship-source", edgeId: edge.id, message: `Relationship ${edge.id} must originate from a creative object` });
+    if (typeof edge.props?.role !== "string" || !edge.props.role.trim()) violations.push({ code: "object.relationship-role", edgeId: edge.id, message: `Relationship ${edge.id} requires a role` });
+    if (edge.props?.transformations !== undefined && !Array.isArray(edge.props.transformations)) violations.push({ code: "object.relationship-transformations", edgeId: edge.id, message: `Relationship ${edge.id} transformations must be an array` });
+    for (const key of ["geometry", "time", "mask", "tracking", "metadata"]) if (edge.props?.[key] !== undefined && !record(edge.props[key])) violations.push({ code: `object.relationship-${key}`, edgeId: edge.id, message: `Relationship ${edge.id} ${key} must be an object` });
   }
 
   for (const clip of nodesByKind(graph, "clip")) {

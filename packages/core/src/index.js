@@ -41,6 +41,7 @@ export * from './collaboration-resolution-batch.js';
 export * from './trust-registry.js';
 export * from './trusted-transition.js';
 export * from './agent-plan.js';
+export * from './creative-object.js';
 export * from './planner.js';
 export * from './project.js';
 export * from './providers.js';
