@@ -1,4 +1,4 @@
-import { createAgentPlanTransaction, selectAgentPlanOperations } from '../../packages/core/src/agent-plan.js';
+import { assertAgentPlanMatchesGraph, createAgentPlanTransaction, selectAgentPlanOperations } from '../../packages/core/src/agent-plan.js';
 import { createAgentPlanReview } from '../../packages/core/src/agent-review.js';
 import { proposeWithProvider } from '../../packages/core/src/providers.js';
 
@@ -28,6 +28,14 @@ export class AgentProposalSession {
 
   async propose(intent, context = {}, options = {}) {
     const plan = await proposeWithProvider(this.provider, this.getGraph(), intent, context, options);
+    this.pending = plan;
+    return this.snapshot();
+  }
+
+  adopt(plan) {
+    const graph = this.getGraph();
+    assertAgentPlanMatchesGraph(graph, plan);
+    createAgentPlanReview(graph, plan);
     this.pending = plan;
     return this.snapshot();
   }
