@@ -38,3 +38,11 @@ The legacy `saveStoredGraph(graph)` path deliberately starts a new journal base:
 The Studio edit dispatcher does not yet append every `applyEdit`/Agent transaction through this journal. Until that handoff lands, normal edits continue to use the compatibility snapshot path and therefore reset the journal base. The persistence primitives and recovery validation are in place first so app adoption can be mechanical and testable.
 
 A future collaboration protocol will need authenticated actor identity, causal ordering/conflict semantics and stronger integrity/authenticity than this local corruption checksum.
+
+## Studio journal session
+
+`apps/studio/project-journal-session.js` packages the ordering rules needed by the editor without owning DOM state. Normal commits run `createTransaction` → `applyTransaction` → append journal entry → atomic persistence, and only advance the in-memory graph/log after persistence succeeds. Concurrent calls are serialized so two UI/agent edits cannot race the same sequence number.
+
+History navigation and project replacement are not naturally invertible operation batches in the current snapshot-based `history.js`. For those transitions the session provides an explicit checkpoint entry containing the target graph. Checkpoints use the same checksum chain and atomic persistence path, and replay recognizes them deterministically. They are intended for undo/redo/import/reset boundaries; ordinary edits should continue to record compact operation transactions.
+
+`recoverProjectJournalSession()` replays the base graph through operation and checkpoint entries and refuses to start if the replayed graph differs from the stored current checkpoint.

@@ -13,7 +13,8 @@
 - vector matte signed-distance/feather reference rasterization;
 - MP4 scale projection, stress command and longitudinal conformance history;
 - Cut and composition-delivery runtime sessions with direct in-memory graph ownership in Studio;
-- deterministic checksummed operation-log primitives plus atomic IndexedDB graph/journal checkpoints and recovery validation.
+- deterministic checksummed operation-log primitives plus atomic IndexedDB graph/journal checkpoints and recovery validation;
+- serialized Studio `ProjectJournalSession` commit/checkpoint/recovery orchestration, ready for editor state plumbing.
 
 ## Next hardening
 
@@ -23,4 +24,4 @@
 4. signed/integrity-pinned codec plugin packaging and real native/WASM codec distributions;
 5. larger encrypted/adaptive real-media corpus plus HLS/DASH live lab fixtures;
 6. integrate MP4 chunk planning directly into final writer interleave policy and stress multi-day outputs;
-7. route Studio edit/Agent commits through the operation journal and recovery path, then add authenticated collaboration and distributed render execution.
+7. route `app.js` edit/Agent/history state through `ProjectJournalSession`, then add authenticated collaboration and distributed render execution.
