@@ -6,6 +6,7 @@ import {
   MAX_HTTP_PLANNER_RESPONSE_BYTES,
   MAX_HTTP_PLANNER_TIMEOUT_MS,
   MAX_PLANNER_OPERATIONS,
+  MAX_PLANNER_RESULT_BYTES,
   MAX_PLANNER_SUMMARY_CHARS,
   assertPlannerResult,
   createHttpPlannerProvider,
@@ -81,4 +82,16 @@ test('HTTP planner factory enforces absolute transport ceilings and snapshots he
   await planWithProvider(provider, createGraph(), 'edit');
   assert.equal(seenHeaders.authorization, 'one');
   assert.equal(seenHeaders['content-type'], 'application/json');
+});
+
+
+test('planner result limit options are strict bounded data before result validation', () => {
+  let getterCalls = 0;
+  const options = {};
+  Object.defineProperty(options, 'maxResultBytes', { enumerable: true, get() { getterCalls += 1; return 256; } });
+  assert.throws(() => assertPlannerResult({ summary: 'ok', operations: [] }, options), /config must contain enumerable data fields only/);
+  assert.equal(getterCalls, 0);
+  assert.throws(() => assertPlannerResult({ summary: 'ok', operations: [] }, { maxResultBytes: '256' }), /maxResultBytes must be an integer/);
+  assert.throws(() => assertPlannerResult({ summary: 'ok', operations: [] }, { maxResultBytes: MAX_PLANNER_RESULT_BYTES + 1 }), /maxResultBytes must be an integer/);
+  assert.throws(() => assertPlannerResult({ summary: 'ok', operations: [] }, { hidden: true }), /Unsupported planner result config field: hidden/);
 });

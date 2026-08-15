@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { assertAgentPlanMatchesGraph } from '../src/agent-plan.js';
-import { AGENT_WORKFLOW_SCHEMA, MAX_AGENT_WORKFLOW_TASKS } from '../src/agent-workflow.js';
+import { AGENT_WORKFLOW_SCHEMA, MAX_AGENT_WORKFLOW_BYTES, MAX_AGENT_WORKFLOW_TASKS } from '../src/agent-workflow.js';
 import { createCreativeObjectOperations } from '../src/creative-object.js';
 import { createGraph } from '../src/graph.js';
 import { ModelRouter } from '../src/model-router.js';
@@ -10,6 +10,7 @@ import {
   assertWorkflowPlannerResult,
   createModelRouterWorkflowProvider,
   createWorkflowPlannerProvider,
+  MAX_PLANNER_CONTEXT_BYTES,
   MAX_PLANNER_INTENT_CHARS,
   proposeAgentWorkflowWithProvider,
 } from '../src/providers.js';
@@ -145,4 +146,42 @@ test('model workflow planner factory rejects accessor-bearing config before rout
   assert.throws(() => createModelRouterWorkflowProvider(config), /config must contain enumerable data fields only/);
   assert.equal(routerGetterCalls, 0);
   assert.throws(() => createModelRouterWorkflowProvider({ router: new ModelRouter(), semanticContextOptions: { neighborDepth: '1' } }), /neighborDepth must be an integer/);
+});
+
+
+test('workflow planner invocation options reject accessors unknown fields and coercive byte limits before provider execution', async () => {
+  const graph = createGraph('Strict workflow invocation');
+  let calls = 0;
+  const provider = createWorkflowPlannerProvider({ id: 'strict-workflow', proposeWorkflow: async () => { calls += 1; return { summary: 'noop', operations: [], tasks: [] }; } });
+  let getterCalls = 0;
+  const accessor = {};
+  Object.defineProperty(accessor, 'maxContextBytes', { enumerable: true, get() { getterCalls += 1; return 256; } });
+  await assert.rejects(() => proposeAgentWorkflowWithProvider(provider, graph, 'delegate', {}, accessor), /config must contain enumerable data fields only/);
+  assert.equal(getterCalls, 0);
+  assert.equal(calls, 0);
+  await assert.rejects(() => proposeAgentWorkflowWithProvider(provider, graph, 'delegate', {}, { maxContextBytes: '256' }), /maxContextBytes must be an integer/);
+  await assert.rejects(() => proposeAgentWorkflowWithProvider(provider, graph, 'delegate', {}, { maxContextBytes: MAX_PLANNER_CONTEXT_BYTES + 1 }), /maxContextBytes must be an integer/);
+  await assert.rejects(() => proposeAgentWorkflowWithProvider(provider, graph, 'delegate', {}, { maxResultBytes: MAX_AGENT_WORKFLOW_BYTES + 1 }), /maxResultBytes must be an integer/);
+  await assert.rejects(() => proposeAgentWorkflowWithProvider(provider, graph, 'delegate', {}, { hidden: true }), /Unsupported workflow planner invocation config field: hidden/);
+  assert.equal(calls, 0);
+});
+
+
+test('workflow planner invocation forwards AbortSignal unchanged through strict option normalization', async () => {
+  const graph = createGraph('Workflow signal');
+  const controller = new AbortController();
+  let seenSignal = null;
+  const provider = createWorkflowPlannerProvider({ id: 'signal-forward', proposeWorkflow: async ({ signal }) => { seenSignal = signal; return { summary: 'noop', operations: [], tasks: [] }; } });
+  await proposeAgentWorkflowWithProvider(provider, graph, 'delegate', {}, { signal: controller.signal });
+  assert.equal(seenSignal, controller.signal);
+});
+
+test('workflow result limit options are strict bounded data before result validation', () => {
+  let getterCalls = 0;
+  const options = {};
+  Object.defineProperty(options, 'maxResultBytes', { enumerable: true, get() { getterCalls += 1; return 256; } });
+  assert.throws(() => assertWorkflowPlannerResult({ summary: 'noop', operations: [], tasks: [] }, options), /config must contain enumerable data fields only/);
+  assert.equal(getterCalls, 0);
+  assert.throws(() => assertWorkflowPlannerResult({ summary: 'noop', operations: [], tasks: [] }, { maxResultBytes: '256' }), /maxResultBytes must be an integer/);
+  assert.throws(() => assertWorkflowPlannerResult({ summary: 'noop', operations: [], tasks: [] }, { maxResultBytes: MAX_AGENT_WORKFLOW_BYTES + 1 }), /maxResultBytes must be an integer/);
 });

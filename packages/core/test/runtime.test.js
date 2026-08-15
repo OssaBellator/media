@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  MAX_PLANNER_CONTEXT_BYTES,
   MAX_PLANNER_INTENT_CHARS,
   MAX_PLANNER_PROVIDER_CAPABILITIES,
   MAX_PLANNER_PROVIDER_CAPABILITY_CHARS,
   MAX_PLANNER_PROVIDER_ID_CHARS,
   MAX_PLANNER_PROVIDER_LABEL_CHARS,
   MAX_PLANNER_PROVIDERS,
+  MAX_PLANNER_RESULT_BYTES,
   PlannerRegistry,
   createHttpPlannerProvider,
   createLocalPlannerProvider,
@@ -176,4 +178,21 @@ test("planner provider normalization freezes bounded descriptors and registry ca
   assert.doesNotThrow(() => registry.register({ id: "provider-0", label: "Replacement", plan: async () => ({ summary: "noop", operations: [] }) }));
   assert.equal(registry.get("provider-0").label, "Replacement");
   assert.equal(registry.list().length, MAX_PLANNER_PROVIDERS);
+});
+
+
+test("planner invocation options reject accessors unknown fields and coercive byte limits before provider execution", async () => {
+  let calls = 0;
+  const provider = createPlannerProvider({ id: "strict-invocation", plan: async () => { calls += 1; return { summary: "noop", operations: [] }; } });
+  let getterCalls = 0;
+  const accessor = {};
+  Object.defineProperty(accessor, "maxContextBytes", { enumerable: true, get() { getterCalls += 1; return 256; } });
+  await assert.rejects(() => planWithProvider(provider, createMediaProject(), "inspect", {}, accessor), /config must contain enumerable data fields only/);
+  assert.equal(getterCalls, 0);
+  assert.equal(calls, 0);
+  await assert.rejects(() => planWithProvider(provider, createMediaProject(), "inspect", {}, { maxContextBytes: "256" }), /maxContextBytes must be an integer/);
+  await assert.rejects(() => planWithProvider(provider, createMediaProject(), "inspect", {}, { maxContextBytes: MAX_PLANNER_CONTEXT_BYTES + 1 }), /maxContextBytes must be an integer/);
+  await assert.rejects(() => planWithProvider(provider, createMediaProject(), "inspect", {}, { maxResultBytes: MAX_PLANNER_RESULT_BYTES + 1 }), /maxResultBytes must be an integer/);
+  await assert.rejects(() => planWithProvider(provider, createMediaProject(), "inspect", {}, { hidden: true }), /Unsupported planner invocation config field: hidden/);
+  assert.equal(calls, 0);
 });

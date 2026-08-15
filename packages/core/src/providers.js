@@ -12,6 +12,8 @@ export const MAX_PLANNER_INTENT_CHARS = 16_384;
 export const DEFAULT_PLANNER_RESULT_BYTES = 2 * 1024 * 1024;
 export const DEFAULT_PLANNER_REQUEST_BYTES = 4 * 1024 * 1024;
 export const DEFAULT_PLANNER_CONTEXT_BYTES = 64 * 1024;
+export const MAX_PLANNER_CONTEXT_BYTES = 1024 * 1024;
+export const MAX_PLANNER_RESULT_BYTES = 8 * 1024 * 1024;
 export const MAX_PLANNER_PROVIDER_ID_CHARS = 160;
 export const MAX_PLANNER_PROVIDER_LABEL_CHARS = 256;
 export const MAX_PLANNER_PROVIDER_CAPABILITIES = 32;
@@ -28,6 +30,9 @@ const MODEL_PLANNER_FACTORY_KEYS = new Set(["router", "id", "label", "policy", "
 const HTTP_PLANNER_FACTORY_KEYS = new Set(["id", "label", "endpoint", "headers", "timeoutMs", "maxResponseBytes", "maxRequestBytes", "fetchImpl"]);
 const SEMANTIC_CONTEXT_OPTION_KEYS = new Set(["limit", "neighborDepth", "maxNodes", "kinds"]);
 const PLANNER_SNAPSHOT_OPTION_KEYS = new Set(["focusNodeIds", "neighborDepth", "maxNodes"]);
+const PLANNER_RESULT_OPTION_KEYS = new Set(["maxResultBytes"]);
+const PLANNER_INVOCATION_OPTION_KEYS = new Set(["maxContextBytes", "maxResultBytes"]);
+const WORKFLOW_INVOCATION_OPTION_KEYS = new Set(["signal", "maxContextBytes", "maxResultBytes"]);
 export const MAX_PLANNER_FOCUS_NODE_IDS = 4096;
 export const MAX_PLANNER_FOCUS_NODE_ID_CHARS = 512;
 
@@ -38,13 +43,20 @@ export function normalizePlannerIntent(intent, label = "Planner intent") {
   if (clean.length > MAX_PLANNER_INTENT_CHARS) throw new Error(`${label} exceeds ${MAX_PLANNER_INTENT_CHARS} characters`);
   return clean;
 }
-export function normalizePlannerContext(context = {}, { maxContextBytes = DEFAULT_PLANNER_CONTEXT_BYTES } = {}) {
-  const byteLimit = boundedPositive(maxContextBytes, DEFAULT_PLANNER_CONTEXT_BYTES);
-  return normalizeBoundedModelJsonObject(context, "Planner context", { maxBytes: byteLimit });
+export function normalizePlannerContext(context = {}, maxContextBytes = DEFAULT_PLANNER_CONTEXT_BYTES) {
+  return normalizeBoundedModelJsonObject(context, "Planner context", { maxBytes: maxContextBytes });
 }
-function boundedPositive(value, fallback, minimum = 256) {
-  const number = Number(value);
-  return Number.isFinite(number) && number >= minimum ? Math.floor(number) : fallback;
+function normalizePlannerResultOptions(options = {}, { workflow = false } = {}) {
+  const clean = normalizeFactoryDescriptor(options, workflow ? "Workflow result" : "Planner result", PLANNER_RESULT_OPTION_KEYS);
+  const ceiling = workflow ? MAX_AGENT_WORKFLOW_BYTES : MAX_PLANNER_RESULT_BYTES;
+  const fallback = workflow ? MAX_AGENT_WORKFLOW_BYTES : DEFAULT_PLANNER_RESULT_BYTES;
+  return Object.freeze({ maxResultBytes: strictFactoryNumber(clean.maxResultBytes, `${workflow ? "Workflow" : "Planner"} result maxResultBytes`, { fallback, min: 256, max: ceiling }) });
+}
+function normalizePlannerInvocationOptions(options = {}, { workflow = false } = {}) {
+  const clean = normalizeFactoryDescriptor(options, workflow ? "Workflow planner invocation" : "Planner invocation", workflow ? WORKFLOW_INVOCATION_OPTION_KEYS : PLANNER_INVOCATION_OPTION_KEYS);
+  const maxContextBytes = strictFactoryNumber(clean.maxContextBytes, `${workflow ? "Workflow planner" : "Planner"} maxContextBytes`, { fallback: DEFAULT_PLANNER_CONTEXT_BYTES, min: 256, max: MAX_PLANNER_CONTEXT_BYTES });
+  const result = normalizePlannerResultOptions(clean.maxResultBytes === undefined ? {} : { maxResultBytes: clean.maxResultBytes }, { workflow });
+  return Object.freeze({ ...(workflow ? { signal: clean.signal } : {}), maxContextBytes, maxResultBytes: result.maxResultBytes });
 }
 function boundedProviderString(value, label, maxChars) {
   if (typeof value !== "string" || !value.trim()) throw new Error(`${label} must be a non-empty string`);
@@ -132,9 +144,9 @@ function normalizeHttpPlannerHeaders(value = {}) {
 function requireProvider(provider) { return normalizeProviderDescriptor(provider); }
 function requireWorkflowProvider(provider) { return normalizeProviderDescriptor(provider, { workflow: true }); }
 
-export function assertPlannerResult(result, { maxResultBytes = DEFAULT_PLANNER_RESULT_BYTES } = {}) {
+export function assertPlannerResult(result, options = {}) {
   if (!result || typeof result !== "object" || Array.isArray(result)) throw new Error("Planner result must be an object");
-  const byteLimit = boundedPositive(maxResultBytes, DEFAULT_PLANNER_RESULT_BYTES);
+  const { maxResultBytes: byteLimit } = normalizePlannerResultOptions(options);
   const clean = normalizeBoundedModelJsonObject(result, "Planner result", { maxBytes: byteLimit });
   if (typeof clean.summary !== "string") throw new Error("Planner result requires a summary");
   if (clean.summary.length > MAX_PLANNER_SUMMARY_CHARS) throw new Error(`Planner result summary exceeds ${MAX_PLANNER_SUMMARY_CHARS} characters`);
@@ -155,9 +167,9 @@ export function createPlannerProvider(config = {}) {
   return requireProvider(config);
 }
 
-export function assertWorkflowPlannerResult(result, { maxResultBytes = MAX_AGENT_WORKFLOW_BYTES } = {}) {
+export function assertWorkflowPlannerResult(result, options = {}) {
   if (!result || typeof result !== "object" || Array.isArray(result)) throw new Error("Workflow planner result must be an object");
-  const byteLimit = boundedPositive(maxResultBytes, MAX_AGENT_WORKFLOW_BYTES);
+  const { maxResultBytes: byteLimit } = normalizePlannerResultOptions(options, { workflow: true });
   const clean = normalizeBoundedModelJsonObject(result, "Workflow planner result", { maxBytes: byteLimit });
   const planner = assertPlannerResult({ summary: clean.summary, operations: clean.operations, ...(clean.metadata !== undefined ? { metadata: clean.metadata } : {}) }, { maxResultBytes: byteLimit });
   if (!Array.isArray(clean.tasks)) throw new Error("Workflow planner result requires a tasks array");
@@ -175,9 +187,9 @@ export function createWorkflowPlannerProvider(config = {}) {
 export async function proposeAgentWorkflowWithProvider(provider, graph, intent, context = {}, options = {}) {
   const valid = requireWorkflowProvider(provider);
   const cleanIntent = normalizePlannerIntent(intent, "Workflow planner intent");
-  const { signal, maxContextBytes, ...validationOptions } = options;
-  const cleanContext = normalizePlannerContext(context, { maxContextBytes });
-  const result = assertWorkflowPlannerResult(await valid.proposeWorkflow({ graph, intent: cleanIntent, context: cleanContext, signal }), validationOptions);
+  const invocation = normalizePlannerInvocationOptions(options, { workflow: true });
+  const cleanContext = normalizePlannerContext(context, invocation.maxContextBytes);
+  const result = assertWorkflowPlannerResult(await valid.proposeWorkflow({ graph, intent: cleanIntent, context: cleanContext, signal: invocation.signal }), { maxResultBytes: invocation.maxResultBytes });
   const plan = createAgentPlan(graph, {
     intent: cleanIntent,
     summary: result.summary,
@@ -197,12 +209,12 @@ export function createLocalPlannerProvider() {
 }
 
 export async function planWithProvider(provider, graph, intent, context = {}, options = {}) {
-  requireProvider(provider);
+  const valid = requireProvider(provider);
   const cleanIntent = normalizePlannerIntent(intent);
-  const { maxContextBytes, ...resultOptions } = options;
-  const cleanContext = normalizePlannerContext(context, { maxContextBytes });
-  const result = await provider.plan({ graph, intent: cleanIntent, context: cleanContext });
-  return assertPlannerResult(result, resultOptions);
+  const invocation = normalizePlannerInvocationOptions(options);
+  const cleanContext = normalizePlannerContext(context, invocation.maxContextBytes);
+  const result = await valid.plan({ graph, intent: cleanIntent, context: cleanContext });
+  return assertPlannerResult(result, { maxResultBytes: invocation.maxResultBytes });
 }
 
 export async function proposeWithProvider(provider, graph, intent, context = {}, options = {}) {
