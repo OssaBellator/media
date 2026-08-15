@@ -79,6 +79,8 @@ export * from './render-artifact-store.js';
 export * from './render-worker-wire.js';
 export * from './render-worker-http.js';
 export * from './render-worker-client.js';
+export * from './render-worker-websocket.js';
+export * from './render-worker-websocket-client.js';
 export * from './seek-index.js';
 export * from './stream-mux.js';
 export * from './wav.js';
