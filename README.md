@@ -4,63 +4,35 @@ Media is an experimental unified creative workstation for image, video, audio, a
 
 The architectural thesis remains: **the creative project is the product, not a collection of application-specific files**. Canvas, Cut, Motion, Deliver and Agent are views over one Universal Creative Graph, reversible history and a shared media-kernel contract.
 
-## Current milestone — 0.13
+## Current milestone — 0.14
 
-0.13 extends the 0.12 adaptive/runtime boundary into **legacy HLS transport, period-correct DASH timing, integrity-pinned codec plugins and adaptive render fidelity** while keeping the large 0.12 parser/playback/kernel modules intact.
+0.14 moves adaptive fidelity from an additive 0.13 experiment into the **normal Cut composition-preview loop** while preserving the existing graph/evaluation/render contracts.
 
-### Legacy HLS / MPEG-TS
+### Real Cut fidelity loop
 
-A new v2 container contract and MPEG-TS kernel cover common 188-byte transport streams:
+Cut now evaluates a composition once, resolves its true FPS from the evaluated composition identity, chooses a fidelity plan and renders that same evaluated plan through the established composition engine.
 
-- transport sync, adaptation fields, PCR and continuity diagnostics;
-- PAT/PMT program and elementary-stream discovery;
-- PES reconstruction across TS packets;
-- 33-bit PTS/DTS unwrapping across segments plus explicit discontinuity reset;
-- H.264/H.265 Annex-B keyframe inspection;
-- H.264 SPS dimensions and concrete RFC6381-style AVC codec strings;
-- AAC/ADTS access-unit extraction with AudioSpecificConfig;
-- bounded `MpegTsSegmentSession` acknowledgement/eviction.
+The feedback loop is executable rather than descriptive:
 
-`AdaptiveMediaSession` routes fetched bytes by signature into either the existing CMAF session or the MPEG-TS session. HLS whole-segment AES-128 still clears before container parsing. TS transport scrambling is a separate protected-media condition and fails explicitly.
+- scrubbing immediately drops to one temporal sample, one vector sample and a reduced preview resolution;
+- normal playback adapts preview resolution plus temporal/vector quality hints from EWMA render cost and recent stale-frame pressure;
+- render outcomes feed the next fidelity decision;
+- export remains full resolution and preserves requested reference quality;
+- switching/invalidation resets performance pressure so one expensive composition does not permanently degrade another.
 
-### DASH timing / periods
+### Cancellation-safe seeking
 
-`dash-v2.js` adds period-correct `SegmentTemplate` expansion without replacing the broader 0.12 DASH parser. It provides:
+Interactive Cut seeks now cancel the previous scrub request with `AbortController`. Cancelled and failed renders are tracked separately from presented/stale frames and do not poison the fidelity performance model.
 
-- inferred period windows from neighboring period starts/MPD duration;
-- period-unique representation IDs even when representation IDs repeat;
-- `UTCTiming` direct / HTTP HEAD / HTTP xsdate/ISO synchronization;
-- ServiceDescription latency/playback-rate metadata;
-- EventStream timing;
-- `availabilityTimeOffset` / `availabilityTimeComplete` metadata;
-- active-period/variant/segment selection across sequence-number restarts.
+`CompositionPlaybackEngine.presentEvaluated()` is the new integration seam. It avoids duplicate graph evaluation, applies the fidelity resolution scale to preview width/height/pixel budgets, carries fidelity metadata into both Canvas2D and WebGPU render calls and keeps the existing latest-generation stale-frame guard.
 
-`DashStreamSessionV2` synchronizes its clock before dynamic expansion and keeps representation-family preference across period transitions.
+### 0.13 media/runtime foundations remain
 
-### Codec plugin deployment
+The 0.13 MPEG-TS, period-aware DASH, secure codec-plugin and non-contiguous WebCodecs payload paths remain intact. The 0.14 change is deliberately concentrated on product playback integration rather than replacing those parsers/runtimes again.
 
-Production codec plugins can be integrity-pinned with SHA-256 SRI or hex digests. The secure loader hashes the **fetched bytes that are actually imported**, rechecks redirect origins, validates optional host-version bounds and requires integrity by default in `createSecureProductionKernelRuntime()`.
+## Deliberate 0.14 boundaries
 
-Integrity-pinned browser plugins are expected to be single-file ESM bundles. Media does not yet verify arbitrary relative-import module graphs as one signed package.
-
-### Adaptive fidelity
-
-`FidelityController` turns temporal/vector reference work into a frame-budget policy:
-
-- scrubbing collapses to one temporal sample and one matte sample;
-- playback adapts temporal samples and matte supersampling from measured render cost/staleness;
-- export preserves requested reference quality;
-- FPS resolution follows the evaluated composition ID, so it does not depend on a graph `kind` marker.
-
-`FidelityPlaybackEngine` is an additive scheduling adapter: it evaluates a composition, attaches the fidelity plan to a render callback and feeds measured outcomes back into the controller. Existing 0.12 composition playback remains a compatible fallback.
-
-### Non-contiguous decoder payloads
-
-`decodePayloadChunks()` lets WebCodecs consume per-chunk elementary payloads directly. MPEG-TS therefore does not need fake source offsets or a reconstructed file-sized elementary stream before decode.
-
-## Deliberate 0.13 boundaries
-
-The TS reference path targets 188-byte MPEG-TS, not 192-byte M2TS. H.264 metadata is deeper than HEVC metadata. AAC/ADTS is reframed; LATM, MP3, AC-3 and E-AC-3 are currently identified at the program level rather than all being normalized into decoder-ready access units. DASH v2 concentrates on period/timing `SegmentTemplate` behavior while the 0.12 parser remains the broader `SegmentList`/`SegmentBase`/`sidx` path. Media still does not ship DRM/key acquisition, native/WASM codec binaries, calibrated OS HDR output or a large copyrighted device corpus.
+Preview resolution scaling is active in normal Cut playback. Temporal motion-blur sample counts and vector supersampling are propagated as fidelity hints for the existing reference kernels; they are not yet the default multi-sample real-time compositor. The TS reference path still targets 188-byte MPEG-TS rather than 192-byte M2TS, and broader LATM/MP3/AC-3/E-AC-3 framing, HEVC parameter metadata, DRM/key acquisition and calibrated OS HDR output remain future work.
 
 ## Run locally
 

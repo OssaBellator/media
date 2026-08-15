@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.14.0
+
+- Integrated frame-budget fidelity into the normal Cut composition-preview path instead of leaving it as an isolated scheduling adapter.
+- Added `CompositionPlaybackEngine.presentEvaluated()` so Cut evaluates the graph once and renders the same evaluated composition through the fidelity loop.
+- Added adaptive preview-resolution scaling driven by EWMA render cost and recent stale-frame pressure; scrubbing drops immediately to a cheaper preview while export remains full resolution.
+- Added an explicit Cut fidelity adapter that resolves FPS from evaluated composition identity and passes fidelity metadata through Canvas2D/WebGPU composition render calls.
+- Added abortable scrub generations so newer interactive seeks cancel stale decode/render work without treating cancellation as a failed or presented frame.
+- Added separate presented/stale/failed/cancelled playback metrics and controller reset semantics so errors or old compositions do not poison future fidelity decisions.
+- Added focused 0.14 playback regressions while preserving the existing 0.09 composition and 0.13 fidelity behavior.
+
 ## 0.13.0
 
 - Added a modular 188-byte MPEG-TS demux/session path with PAT/PMT discovery, PES reconstruction, continuity/PCR diagnostics and 33-bit timestamp rollover handling.
