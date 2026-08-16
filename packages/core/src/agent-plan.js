@@ -5,6 +5,10 @@ import { applyOperations, assertValidOperation, createTransaction } from "./oper
 
 export const AGENT_PLAN_SCHEMA = "media.agent-plan.v1";
 
+const AGENT_PLAN_OPTION_KEYS = new Set(["id", "revision", "intent", "summary", "operations", "providerId", "providerLabel", "metadata", "createdAt", "updatedAt"]);
+const AGENT_PLAN_REVISION_OPTION_KEYS = new Set(["summary", "metadata"]);
+const AGENT_PLAN_TRANSACTION_OPTION_KEYS = new Set(["label", "metadata"]);
+
 function requireString(value, label) {
   if (typeof value !== "string" || !value.trim()) throw new Error(`${label} must be a non-empty string`);
   return value.trim();
@@ -74,28 +78,28 @@ export class AgentPlanStaleError extends Error {
 
 export function assertAgentPlan(plan) {
   if (!plan || typeof plan !== "object" || Array.isArray(plan)) throw new Error("Agent plan must be an object");
-  if (plan.schema !== AGENT_PLAN_SCHEMA) throw new Error(`Unsupported agent plan schema: ${plan.schema}`);
-  requireString(plan.id, "Agent plan id");
-  if (!Number.isSafeInteger(plan.revision) || plan.revision < 1) throw new Error("Agent plan revision must be a positive safe integer");
-  requireString(plan.intent, "Agent plan intent");
-  if (typeof plan.summary !== "string") throw new Error("Agent plan summary must be a string");
-  requireString(plan.provider?.id, "Agent plan provider id");
-  if (typeof plan.provider?.label !== "string") throw new Error("Agent plan provider label must be a string");
-  requireString(plan.base?.projectId, "Agent plan base projectId");
-  requireString(plan.base?.fingerprint, "Agent plan base fingerprint");
-  requireString(plan.preview?.fingerprint, "Agent plan preview fingerprint");
-  if (!Array.isArray(plan.operations)) throw new Error("Agent plan operations must be an array");
-  plan.operations.forEach(assertValidOperation);
-  canonicalOperationLogJson(plan);
-  return plan;
+  const clean = cloneJson(plan, "Agent plan");
+  if (clean.schema !== AGENT_PLAN_SCHEMA) throw new Error(`Unsupported agent plan schema: ${clean.schema}`);
+  requireString(clean.id, "Agent plan id");
+  if (!Number.isSafeInteger(clean.revision) || clean.revision < 1) throw new Error("Agent plan revision must be a positive safe integer");
+  requireString(clean.intent, "Agent plan intent");
+  if (typeof clean.summary !== "string") throw new Error("Agent plan summary must be a string");
+  requireString(clean.provider?.id, "Agent plan provider id");
+  if (typeof clean.provider?.label !== "string") throw new Error("Agent plan provider label must be a string");
+  requireString(clean.base?.projectId, "Agent plan base projectId");
+  requireString(clean.base?.fingerprint, "Agent plan base fingerprint");
+  requireString(clean.preview?.fingerprint, "Agent plan preview fingerprint");
+  if (!Array.isArray(clean.operations)) throw new Error("Agent plan operations must be an array");
+  clean.operations.forEach(assertValidOperation);
+  return clean;
 }
 
 export function inspectAgentPlan(plan) {
-  assertAgentPlan(plan);
+  const clean = assertAgentPlan(plan);
   const operationCounts = {};
   const nodeIds = new Set();
   const edgeIds = new Set();
-  for (const operation of plan.operations) {
+  for (const operation of clean.operations) {
     operationCounts[operation.type] = (operationCounts[operation.type] ?? 0) + 1;
     if (operation.type === "node.add") nodeIds.add(operation.node.id);
     if (operation.type === "node.update" || operation.type === "node.remove") nodeIds.add(operation.nodeId);
@@ -103,7 +107,7 @@ export function inspectAgentPlan(plan) {
     if (operation.type === "edge.remove") edgeIds.add(operation.edgeId);
   }
   return {
-    operationCount: plan.operations.length,
+    operationCount: clean.operations.length,
     operationCounts,
     nodeIds: [...nodeIds],
     edgeIds: [...edgeIds],
@@ -111,29 +115,31 @@ export function inspectAgentPlan(plan) {
 }
 
 export function assertAgentPlanMatchesGraph(graph, plan) {
-  assertAgentPlan(plan);
+  const clean = assertAgentPlan(plan);
   const actual = agentGraphFingerprint(graph);
-  if (graph.projectId !== plan.base.projectId || actual !== plan.base.fingerprint) {
-    throw new AgentPlanStaleError("Agent plan was created for a different project state", { expected: plan.base.fingerprint, actual });
+  if (graph.projectId !== clean.base.projectId || actual !== clean.base.fingerprint) {
+    throw new AgentPlanStaleError("Agent plan was created for a different project state", { expected: clean.base.fingerprint, actual });
   }
-  return plan;
+  return clean;
 }
 
-function finalizeAgentPlan(graph, {
-  id = createId("agent-plan"),
-  revision = 1,
-  intent,
-  summary = "",
-  operations = [],
-  providerId = "unknown",
-  providerLabel = providerId,
-  metadata = {},
-  createdAt = new Date().toISOString(),
-  updatedAt = createdAt,
-} = {}) {
+function finalizeAgentPlan(graph, options = {}) {
+  const config = dataOptions(options, "Agent plan options", AGENT_PLAN_OPTION_KEYS);
+  const id = config.id === undefined ? createId("agent-plan") : config.id;
+  const revision = config.revision === undefined ? 1 : config.revision;
+  const intent = config.intent;
+  const summary = config.summary === undefined ? "" : config.summary;
+  const operations = config.operations === undefined ? [] : config.operations;
+  const providerId = config.providerId === undefined ? "unknown" : config.providerId;
+  const metadata = config.metadata === undefined ? {} : config.metadata;
+  const createdAt = config.createdAt === undefined ? new Date().toISOString() : config.createdAt;
+  const updatedAt = config.updatedAt === undefined ? createdAt : config.updatedAt;
   const cleanIntent = requireString(intent, "Agent plan intent");
   const cleanProviderId = requireString(providerId, "Agent plan provider id");
+  const providerLabel = config.providerLabel == null ? cleanProviderId : config.providerLabel;
+  if (!Number.isSafeInteger(revision) || revision < 1) throw new Error("Agent plan revision must be a positive safe integer");
   if (typeof summary !== "string") throw new Error("Agent plan summary must be a string");
+  if (typeof providerLabel !== "string") throw new Error("Agent plan provider label must be a string");
   if (!Array.isArray(operations)) throw new Error("Agent plan operations must be an array");
   const cleanOperations = cloneJson(operations, "Agent plan operations");
   const previewGraph = applyOperations(graph, cleanOperations);
@@ -145,7 +151,7 @@ function finalizeAgentPlan(graph, {
     updatedAt: requireString(updatedAt, "Agent plan updatedAt"),
     intent: cleanIntent,
     summary,
-    provider: { id: cleanProviderId, label: String(providerLabel ?? cleanProviderId) },
+    provider: { id: cleanProviderId, label: providerLabel },
     base: { projectId: graph.projectId, fingerprint: agentGraphFingerprint(graph) },
     preview: { fingerprint: agentGraphFingerprint(previewGraph) },
     operations: cleanOperations,
@@ -159,52 +165,56 @@ export function createAgentPlan(graph, options = {}) {
 }
 
 export function previewAgentPlan(graph, plan) {
-  assertAgentPlanMatchesGraph(graph, plan);
-  const nextGraph = applyOperations(graph, plan.operations);
+  const clean = assertAgentPlanMatchesGraph(graph, plan);
+  const nextGraph = applyOperations(graph, clean.operations);
   const fingerprint = agentGraphFingerprint(nextGraph);
-  if (fingerprint !== plan.preview.fingerprint) throw new Error("Agent plan preview fingerprint does not match its operations");
-  return { graph: nextGraph, fingerprint, impact: inspectAgentPlan(plan) };
+  if (fingerprint !== clean.preview.fingerprint) throw new Error("Agent plan preview fingerprint does not match its operations");
+  return { graph: nextGraph, fingerprint, impact: inspectAgentPlan(clean) };
 }
 
-export function reviseAgentPlan(graph, plan, operations, { summary = plan?.summary, metadata = plan?.metadata } = {}) {
-  assertAgentPlanMatchesGraph(graph, plan);
+export function reviseAgentPlan(graph, plan, operations, options = {}) {
+  const clean = assertAgentPlanMatchesGraph(graph, plan);
+  const config = dataOptions(options, "Agent plan revision options", AGENT_PLAN_REVISION_OPTION_KEYS);
+  const summary = config.summary === undefined ? clean.summary : config.summary;
+  const metadata = config.metadata === undefined ? clean.metadata : config.metadata;
   return finalizeAgentPlan(graph, {
-    id: plan.id,
-    revision: plan.revision + 1,
-    createdAt: plan.createdAt,
+    id: clean.id,
+    revision: clean.revision + 1,
+    createdAt: clean.createdAt,
     updatedAt: new Date().toISOString(),
-    intent: plan.intent,
+    intent: clean.intent,
     summary,
     operations,
-    providerId: plan.provider.id,
-    providerLabel: plan.provider.label,
+    providerId: clean.provider.id,
+    providerLabel: clean.provider.label,
     metadata,
   });
 }
 
 export function selectAgentPlanOperations(graph, plan, operationIndexes, options = {}) {
-  assertAgentPlanMatchesGraph(graph, plan);
-  const indexes = operationSelectionIndexes(operationIndexes, plan.operations.length);
-  const config = dataOptions(options, "Agent plan selection options", new Set(["summary", "metadata"]));
-  return reviseAgentPlan(graph, plan, indexes.map((index) => plan.operations[index]), config);
+  const clean = assertAgentPlanMatchesGraph(graph, plan);
+  const indexes = operationSelectionIndexes(operationIndexes, clean.operations.length);
+  const config = dataOptions(options, "Agent plan selection options", AGENT_PLAN_REVISION_OPTION_KEYS);
+  return reviseAgentPlan(graph, clean, indexes.map((index) => clean.operations[index]), config);
 }
 
 export function createAgentPlanTransaction(graph, plan, options = {}) {
-  const config = dataOptions(options, "Agent transaction options", new Set(["label", "metadata"]));
-  previewAgentPlan(graph, plan);
-  const label = config.label ?? (plan.summary || "Agent edit");
+  const config = dataOptions(options, "Agent transaction options", AGENT_PLAN_TRANSACTION_OPTION_KEYS);
+  const clean = assertAgentPlanMatchesGraph(graph, plan);
+  previewAgentPlan(graph, clean);
+  const label = config.label ?? (clean.summary || "Agent edit");
   const cleanMetadata = cloneJson(config.metadata ?? {}, "Agent transaction metadata");
-  return createTransaction(label || "Agent edit", cloneJson(plan.operations, "Agent plan operations"), {
+  return createTransaction(label || "Agent edit", clean.operations, {
     ...cleanMetadata,
     source: "agent",
     agentPlan: {
-      schema: plan.schema,
-      id: plan.id,
-      revision: plan.revision,
-      providerId: plan.provider.id,
-      intent: plan.intent,
-      baseFingerprint: plan.base.fingerprint,
-      previewFingerprint: plan.preview.fingerprint,
+      schema: clean.schema,
+      id: clean.id,
+      revision: clean.revision,
+      providerId: clean.provider.id,
+      intent: clean.intent,
+      baseFingerprint: clean.base.fingerprint,
+      previewFingerprint: clean.preview.fingerprint,
     },
   });
 }

@@ -52,24 +52,24 @@ function reviewOperation(graph, operation, index) {
 }
 
 export function createAgentPlanReview(graph, plan) {
-  assertAgentPlanMatchesGraph(graph, plan);
+  const clean = assertAgentPlanMatchesGraph(graph, plan);
   const operations = [];
   let cursor = graph;
-  for (let index = 0; index < plan.operations.length; index += 1) {
-    const operation = plan.operations[index];
+  for (let index = 0; index < clean.operations.length; index += 1) {
+    const operation = clean.operations[index];
     operations.push(reviewOperation(cursor, operation, index));
     cursor = applyOperation(cursor, operation);
   }
-  const preview = previewAgentPlan(graph, plan);
+  const preview = previewAgentPlan(graph, clean);
   return {
-    planId: plan.id,
-    revision: plan.revision,
-    intent: plan.intent,
-    summary: plan.summary,
-    provider: { ...plan.provider },
-    baseFingerprint: plan.base.fingerprint,
+    planId: clean.id,
+    revision: clean.revision,
+    intent: clean.intent,
+    summary: clean.summary,
+    provider: { ...clean.provider },
+    baseFingerprint: clean.base.fingerprint,
     previewFingerprint: preview.fingerprint,
-    impact: inspectAgentPlan(plan),
+    impact: inspectAgentPlan(clean),
     operations,
   };
 }

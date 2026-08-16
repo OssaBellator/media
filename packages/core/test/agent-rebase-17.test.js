@@ -42,6 +42,22 @@ test('agent plan rebase refuses removal of a node the proposal updates', () => {
   assert.equal(analyzeAgentPlanRebase(base, current, plan, [local]).safe, false);
 });
 
+test('agent rebase snapshots transaction data and rejects accessor options without execution', () => {
+  const base = createGraph('Before');
+  const plan = createAgentPlan(base, { intent: 'rename', providerId: 'mock', operations: [] });
+  let getterCalls = 0;
+  const forgedTransaction = { id: 'tx', label: 'unsafe', metadata: {}, createdAt: 'now' };
+  Object.defineProperty(forgedTransaction, 'operations', { enumerable: true, get() { getterCalls += 1; return []; } });
+  assert.throws(() => analyzeAgentPlanRebase(base, base, plan, [forgedTransaction]), /Intervening transactions must be JSON-safe/);
+  const options = {};
+  Object.defineProperty(options, 'summary', { enumerable: true, get() { getterCalls += 1; return 'unsafe'; } });
+  assert.throws(() => rebaseAgentPlan(base, base, plan, [], options), /rebase options must contain enumerable data fields only/);
+  let coercions = 0;
+  assert.throws(() => rebaseAgentPlan(base, base, plan, [], { summary: { toString() { coercions += 1; return 'unsafe'; } } }), /summary must be a string/);
+  assert.equal(getterCalls, 0);
+  assert.equal(coercions, 0);
+});
+
 test('agent rebase verifies that supplied transactions exactly reconstruct current state', () => {
   const base = createGraph('Before');
   const plan = createAgentPlan(base, { intent: 'rename', providerId: 'mock', operations: [{ type: 'node.update', nodeId: base.projectId, patch: { name: 'Agent' } }] });
