@@ -27,6 +27,72 @@ test('Agent workflow session lets semantic analysis feed a later generation task
   assert.ok(Object.values(result.previewGraph.nodes).some((node) => node.kind === 'object' && node.props.semanticId === 'wardrobe:jacket'));
 });
 
+test('Agent workflow session rejects accessor dependencies and unsafe execution options before model work', async () => {
+  const graph = createGraph('Film');
+  let getterCalls = 0;
+  const forgedRouter = {};
+  Object.defineProperty(forgedRouter, 'execute', { get() { getterCalls += 1; return () => {}; } });
+  assert.throws(() => new AgentWorkflowSession({ router: forgedRouter, getGraph: () => graph }), /execute must be a data method/);
+  assert.equal(getterCalls, 0);
+  const constructorOptions = { getGraph: () => graph };
+  Object.defineProperty(constructorOptions, 'router', { enumerable: true, get() { getterCalls += 1; return forgedRouter; } });
+  assert.throws(() => new AgentWorkflowSession(constructorOptions), /session options must contain enumerable data fields only/);
+  assert.equal(getterCalls, 0);
+
+  let invokes = 0;
+  const router = new ModelRouter().register({ id: 'vision', operations: ['analyze-media'], invoke: async () => { invokes += 1; return { objects: [] }; } });
+  const plan = createAgentPlan(graph, { intent: 'analyze', providerId: 'mock', operations: [] });
+  const workflow = createAgentWorkflow(plan, [{ id: 'analyze', kind: 'semantic-enrichment', payload: {} }]);
+  const session = new AgentWorkflowSession({ router, getGraph: () => graph });
+  const executionOptions = {};
+  Object.defineProperty(executionOptions, 'inputs', { enumerable: true, get() { getterCalls += 1; return {}; } });
+  await assert.rejects(() => session.execute(workflow, executionOptions), /execution options must contain enumerable data fields only/);
+  const forgedSignal = {};
+  Object.defineProperty(forgedSignal, 'aborted', { get() { getterCalls += 1; return false; } });
+  await assert.rejects(() => session.execute(workflow, { signal: forgedSignal }), /AbortSignal/);
+  await assert.rejects(() => session.execute(workflow, { inputs: { missing: {} } }), /Unknown Agent workflow input task/);
+  assert.equal(getterCalls, 0);
+  assert.equal(invokes, 0);
+});
+
+test('Agent workflow session snapshots task inputs before asynchronous model work', async () => {
+  const graph = createGraph('Film');
+  let seenNote = null;
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const router = new ModelRouter().register({ id: 'vision', operations: ['analyze-media'], invoke: async (_operation, input) => { await gate; seenNote = input.input.note; return { objects: [] }; } });
+  const plan = createAgentPlan(graph, { intent: 'analyze', providerId: 'mock', operations: [] });
+  const workflow = createAgentWorkflow(plan, [{ id: 'analyze', kind: 'semantic-enrichment', payload: {} }]);
+  const inputs = { analyze: { note: 'original' } };
+  const pending = new AgentWorkflowSession({ router, getGraph: () => graph }).execute(workflow, { inputs });
+  inputs.analyze.note = 'mutated';
+  release();
+  await pending;
+  assert.equal(seenNote, 'original');
+});
+
+test('Agent workflow session treats prototype-named task inputs as explicit own data only', async () => {
+  const graph = createGraph('Film');
+  let seenInput = null;
+  const router = new ModelRouter().register({ id: 'vision', operations: ['analyze-media'], invoke: async (_operation, input) => { seenInput = input.input; return { objects: [] }; } });
+  const plan = createAgentPlan(graph, { intent: 'analyze', providerId: 'mock', operations: [] });
+  const workflow = createAgentWorkflow(plan, [{ id: '__proto__', kind: 'semantic-enrichment', payload: {} }]);
+  const result = await new AgentWorkflowSession({ router, getGraph: () => graph }).execute(workflow);
+  assert.deepEqual(seenInput, {});
+  assert.equal(result.plan.metadata.workflow.tasks[0].id, '__proto__');
+});
+
+test('Agent workflow execution errors do not execute hostile message or string coercion', () => {
+  let getterCalls = 0;
+  let coercions = 0;
+  const error = { toString() { coercions += 1; return 'secret'; } };
+  Object.defineProperty(error, 'message', { get() { getterCalls += 1; return 'private'; } });
+  const wrapped = new AgentWorkflowExecutionError('task', error, { safe: true });
+  assert.match(wrapped.message, /Agent workflow task failed/);
+  assert.equal(getterCalls, 0);
+  assert.equal(coercions, 0);
+});
+
 test('Agent workflow session keeps generated asset bytes pending for final proposal approval', async () => {
   const graph = createGraph('Film');
   const bytes = new Uint8Array([5, 6, 7]);
