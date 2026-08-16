@@ -1,18 +1,35 @@
 import { assertAgentPlanMatchesGraph, createAgentPlanTransaction, selectAgentPlanOperations } from '../../packages/core/src/agent-plan.js';
 import { createAgentPlanReview } from '../../packages/core/src/agent-review.js';
 import { proposeWithProvider } from '../../packages/core/src/providers.js';
+import { normalizeStudioPersistContext } from './persistence-context.js';
 
 function requireFunction(value, label) {
   if (typeof value !== 'function') throw new Error(`${label} must be a function`);
   return value;
 }
 
+const APPLY_OPTION_KEYS = new Set(['operationIndexes', 'metadata', 'persistContext']);
+
+function dataOptions(value, label, allowedKeys) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${label} must be a plain data object`);
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) throw new Error(`${label} must be a plain data object`);
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  const clean = {};
+  for (const key of Reflect.ownKeys(descriptors)) {
+    if (typeof key !== 'string' || !allowedKeys.has(key)) throw new Error(`Unsupported ${label} field: ${String(key)}`);
+    const descriptor = descriptors[key];
+    if (!descriptor.enumerable || !Object.hasOwn(descriptor, 'value')) throw new Error(`${label} must contain enumerable data fields only`);
+    clean[key] = descriptor.value;
+  }
+  return clean;
+}
+
 function persistContextForOperations(persistContext, operations) {
-  if (!persistContext) return undefined;
+  const safe = normalizeStudioPersistContext(persistContext);
+  if (!safe) return undefined;
   const assetIds = new Set(operations.filter((operation) => operation.type === 'node.add' && operation.node?.kind === 'asset').map((operation) => operation.node.id));
-  const next = { ...persistContext };
-  if (Array.isArray(persistContext.assetWrites)) next.assetWrites = persistContext.assetWrites.filter((write) => assetIds.has(String(write.assetId)));
-  return next;
+  return { assetWrites: safe.assetWrites.filter((write) => assetIds.has(write.assetId)) };
 }
 
 function atomicReviewRequired(plan) {
@@ -21,7 +38,12 @@ function atomicReviewRequired(plan) {
 
 function assertAtomicSelection(plan, operationIndexes) {
   if (!atomicReviewRequired(plan)) return;
-  const indexes = operationIndexes.map(Number);
+  const indexes = [];
+  for (let position = 0; position < operationIndexes.length; position += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(operationIndexes, String(position));
+    if (!descriptor?.enumerable || !Object.hasOwn(descriptor, 'value') || !Number.isSafeInteger(descriptor.value)) throw new Error('Atomic Agent operation selection requires dense integer indexes');
+    indexes.push(descriptor.value);
+  }
   const expected = plan.operations.length;
   const sorted = [...new Set(indexes)].sort((a, b) => a - b);
   const complete = indexes.length === expected && sorted.length === expected && sorted.every((value, index) => value === index);
@@ -78,12 +100,14 @@ export class AgentProposalSession {
     return plan;
   }
 
-  async apply({ operationIndexes = null, metadata = {}, persistContext = undefined } = {}) {
+  async apply(options = {}) {
     if (!this.pending) throw new Error('No Agent proposal is pending');
+    const config = dataOptions(options, 'Agent proposal apply options', APPLY_OPTION_KEYS);
+    const operationIndexes = config.operationIndexes ?? null;
     if (operationIndexes != null) this.select(operationIndexes);
     const plan = this.pending;
-    const transaction = createAgentPlanTransaction(this.getGraph(), plan, { metadata });
-    const filteredPersistContext = persistContextForOperations(persistContext, transaction.operations);
+    const transaction = createAgentPlanTransaction(this.getGraph(), plan, { metadata: config.metadata ?? {} });
+    const filteredPersistContext = persistContextForOperations(config.persistContext, transaction.operations);
     const result = await this.commit(transaction.label, transaction.operations, transaction.metadata, filteredPersistContext ? { persistContext: filteredPersistContext } : {});
     this.pending = null;
     return { plan, transaction, persistContext: filteredPersistContext, result };

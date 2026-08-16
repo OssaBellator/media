@@ -13,6 +13,33 @@ function cloneJson(value, label) {
   try { return JSON.parse(canonicalOperationLogJson(value)); }
   catch (error) { throw new Error(`${label} must be JSON-safe: ${error.message}`, { cause: error }); }
 }
+function dataOptions(value, label, allowedKeys) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${label} must be a plain data object`);
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) throw new Error(`${label} must be a plain data object`);
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  const clean = {};
+  for (const key of Reflect.ownKeys(descriptors)) {
+    if (typeof key !== "string" || !allowedKeys.has(key)) throw new Error(`Unsupported ${label} field: ${String(key)}`);
+    const descriptor = descriptors[key];
+    if (!descriptor.enumerable || !Object.hasOwn(descriptor, "value")) throw new Error(`${label} must contain enumerable data fields only`);
+    clean[key] = descriptor.value;
+  }
+  return clean;
+}
+function operationSelectionIndexes(operationIndexes, operationCount) {
+  if (!Array.isArray(operationIndexes)) throw new Error("Agent plan operation selection must be an array");
+  const seen = new Set(), indexes = [];
+  for (let position = 0; position < operationIndexes.length; position += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(operationIndexes, String(position));
+    if (!descriptor?.enumerable || !Object.hasOwn(descriptor, "value")) throw new Error("Agent plan operation selection must contain dense enumerable data indexes only");
+    const index = descriptor.value;
+    if (!Number.isSafeInteger(index) || index < 0 || index >= operationCount) throw new Error("Agent plan operation index is out of range");
+    if (seen.has(index)) throw new Error(`Agent plan operation index is duplicated: ${index}`);
+    seen.add(index);indexes.push(index);
+  }
+  return indexes.sort((a, b) => a - b);
+}
 function graphFingerprintPayload(graph) {
   assertValidGraph(graph);
   const nodes = Object.fromEntries(Object.entries(graph.nodes).map(([id, node]) => [id, {
@@ -157,21 +184,16 @@ export function reviseAgentPlan(graph, plan, operations, { summary = plan?.summa
 
 export function selectAgentPlanOperations(graph, plan, operationIndexes, options = {}) {
   assertAgentPlanMatchesGraph(graph, plan);
-  if (!Array.isArray(operationIndexes)) throw new Error("Agent plan operation selection must be an array");
-  const seen = new Set();
-  const indexes = operationIndexes.map((value) => {
-    const index = Number(value);
-    if (!Number.isSafeInteger(index) || index < 0 || index >= plan.operations.length) throw new Error(`Agent plan operation index is out of range: ${value}`);
-    if (seen.has(index)) throw new Error(`Agent plan operation index is duplicated: ${index}`);
-    seen.add(index);
-    return index;
-  }).sort((a, b) => a - b);
-  return reviseAgentPlan(graph, plan, indexes.map((index) => plan.operations[index]), options);
+  const indexes = operationSelectionIndexes(operationIndexes, plan.operations.length);
+  const config = dataOptions(options, "Agent plan selection options", new Set(["summary", "metadata"]));
+  return reviseAgentPlan(graph, plan, indexes.map((index) => plan.operations[index]), config);
 }
 
-export function createAgentPlanTransaction(graph, plan, { label = plan?.summary || "Agent edit", metadata = {} } = {}) {
+export function createAgentPlanTransaction(graph, plan, options = {}) {
+  const config = dataOptions(options, "Agent transaction options", new Set(["label", "metadata"]));
   previewAgentPlan(graph, plan);
-  const cleanMetadata = cloneJson(metadata, "Agent transaction metadata");
+  const label = config.label ?? (plan.summary || "Agent edit");
+  const cleanMetadata = cloneJson(config.metadata ?? {}, "Agent transaction metadata");
   return createTransaction(label || "Agent edit", cloneJson(plan.operations, "Agent plan operations"), {
     ...cleanMetadata,
     source: "agent",

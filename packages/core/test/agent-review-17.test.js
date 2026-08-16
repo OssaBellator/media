@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createGraph } from '../src/graph.js';
 import { applyOperations } from '../src/operations.js';
-import { createAgentPlan, selectAgentPlanOperations } from '../src/agent-plan.js';
+import { createAgentPlan, createAgentPlanTransaction, selectAgentPlanOperations } from '../src/agent-plan.js';
 import { createAgentPlanReview } from '../src/agent-review.js';
 import { createCreativeObjectOperations } from '../src/creative-object.js';
 
@@ -41,6 +41,29 @@ test('agent plan operation selection creates a revised graph-bound proposal', ()
   assert.equal(selected.operations.length, 1);
   assert.equal(selected.operations[0].patch.props.note, 'keep me');
   assert.equal(selected.summary, 'Keep note only');
+});
+
+test('agent plan selection and transaction options reject accessors and coercive indexes without execution', () => {
+  const graph = createGraph('Before');
+  const plan = createAgentPlan(graph, {
+    intent: 'rename project',
+    providerId: 'mock',
+    operations: [{ type: 'node.update', nodeId: graph.projectId, patch: { name: 'After' } }],
+  });
+  let coercions = 0;
+  assert.throws(() => selectAgentPlanOperations(graph, plan, [{ valueOf() { coercions += 1; return 0; } }]), /index is out of range/);
+  assert.equal(coercions, 0);
+  const sparse = []; sparse.length = 1;
+  assert.throws(() => selectAgentPlanOperations(graph, plan, sparse), /dense enumerable data indexes only/);
+  let getterCalls = 0;
+  const selectionOptions = {};
+  Object.defineProperty(selectionOptions, 'summary', { enumerable: true, get() { getterCalls += 1; return 'unsafe'; } });
+  assert.throws(() => selectAgentPlanOperations(graph, plan, [0], selectionOptions), /selection options must contain enumerable data fields only/);
+  assert.equal(getterCalls, 0);
+  const transactionOptions = {};
+  Object.defineProperty(transactionOptions, 'metadata', { enumerable: true, get() { getterCalls += 1; return {}; } });
+  assert.throws(() => createAgentPlanTransaction(graph, plan, transactionOptions), /transaction options must contain enumerable data fields only/);
+  assert.equal(getterCalls, 0);
 });
 
 test('operation selection preflights dependencies instead of allowing a broken partial plan', () => {

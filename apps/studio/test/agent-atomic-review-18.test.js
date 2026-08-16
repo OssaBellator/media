@@ -29,6 +29,11 @@ test('proposal session rejects partial selection for atomic-review plans', () =>
   const session = sessionWith(graph, plan);
   assert.throws(() => session.select([0, 2]), /atomic review/);
   assert.throws(() => session.select([0, 1, 1]), /atomic review/);
+  let coercions = 0;
+  assert.throws(() => session.select([0, 1, { valueOf() { coercions += 1; return 2; } }]), /dense integer indexes/);
+  assert.equal(coercions, 0);
+  const sparse = [0, 1]; sparse.length = 3;
+  assert.throws(() => session.select(sparse), /dense integer indexes/);
   assert.doesNotThrow(() => session.select([2, 0, 1]));
   assert.equal(session.snapshot().plan, plan);
   const restylePlan = { ...plan, id: 'p2', metadata: { creativeObjectRestyle: { atomic: true } } };
