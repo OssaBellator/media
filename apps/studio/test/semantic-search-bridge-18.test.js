@@ -24,11 +24,50 @@ test('Studio services expose only registered canonical graph, selection and opti
     assert.equal(selectStudioNode('asset'), true);
     assert.deepEqual(selected, ['asset']);
     assert.equal(getStudioModelRouter(), router);
-    assert.throws(() => selectStudioNode('   '), /non-empty node id/);
+    assert.throws(() => selectStudioNode('   '), /non-empty string node id/);
   } finally {
     restoreRouter();
     restoreSelection();
     restoreGraph();
+  }
+});
+
+test('Studio services reject graph and router accessors without executing them', () => {
+  let projectGetterCalls = 0;
+  const graph = { nodes: {} };
+  Object.defineProperty(graph, 'projectId', { enumerable: true, get() { projectGetterCalls += 1; return 'project-1'; } });
+  const restoreGraph = registerStudioGraphProvider(() => graph);
+  try {
+    assert.throws(() => getStudioGraph(), /Studio graph projectId must be an enumerable data property/);
+    assert.equal(projectGetterCalls, 0);
+  } finally {
+    restoreGraph();
+  }
+
+  let executeGetterCalls = 0;
+  const router = { list() { return []; } };
+  Object.defineProperty(router, 'execute', { enumerable: true, get() { executeGetterCalls += 1; return () => {}; } });
+  const restoreRouter = registerStudioModelRouterProvider(() => router);
+  try {
+    assert.throws(() => getStudioModelRouter(), /invalid router/);
+    assert.equal(executeGetterCalls, 0);
+  } finally {
+    restoreRouter();
+  }
+});
+
+test('Studio node selection rejects coercive and oversized identities before selector invocation', () => {
+  const selected = [];
+  const restoreSelection = registerStudioNodeSelector((nodeId) => { selected.push(nodeId); return true; });
+  let coercions = 0;
+  const forged = { toString() { coercions += 1; return 'asset'; } };
+  try {
+    assert.throws(() => selectStudioNode(forged), /non-empty string node id/);
+    assert.equal(coercions, 0);
+    assert.throws(() => selectStudioNode('x'.repeat(1025)), /exceeds 1024 characters/);
+    assert.deepEqual(selected, []);
+  } finally {
+    restoreSelection();
   }
 });
 

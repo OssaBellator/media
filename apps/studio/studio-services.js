@@ -2,10 +2,29 @@ let graphProvider = null;
 let nodeSelector = null;
 let modelRouterProvider = null;
 let commitProvider = null;
+const MAX_STUDIO_NODE_ID_CHARS = 1024;
 
 function requireFunction(value, label) {
   if (typeof value !== 'function') throw new Error(`${label} must be a function`);
   return value;
+}
+
+function ownDataField(value, key, label) {
+  if (!value || typeof value !== 'object') throw new Error(`${label} must be an object`);
+  const descriptor = Object.getOwnPropertyDescriptor(value, key);
+  if (!descriptor?.enumerable || !Object.hasOwn(descriptor, 'value')) throw new Error(`${label} ${key} must be an enumerable data property`);
+  return descriptor.value;
+}
+
+function hasDataMethod(value, name) {
+  if (!value || (typeof value !== 'object' && typeof value !== 'function')) return false;
+  let owner = value;
+  while (owner) {
+    const descriptor = Object.getOwnPropertyDescriptor(owner, name);
+    if (descriptor) return Object.hasOwn(descriptor, 'value') && typeof descriptor.value === 'function';
+    owner = Object.getPrototypeOf(owner);
+  }
+  return false;
 }
 
 function restoreRegistration(current, previous, getCurrent, setCurrent) {
@@ -24,9 +43,10 @@ export function registerStudioGraphProvider(provider) {
 export function getStudioGraph() {
   if (!graphProvider) throw new Error('Studio graph provider is not registered');
   const graph = graphProvider();
-  if (!graph || typeof graph !== 'object' || typeof graph.projectId !== 'string' || !graph.nodes || typeof graph.nodes !== 'object') {
-    throw new Error('Studio graph provider returned an invalid graph');
-  }
+  if (!graph || typeof graph !== 'object' || Array.isArray(graph)) throw new Error('Studio graph provider returned an invalid graph');
+  const projectId = ownDataField(graph, 'projectId', 'Studio graph');
+  const nodes = ownDataField(graph, 'nodes', 'Studio graph');
+  if (typeof projectId !== 'string' || !projectId || !nodes || typeof nodes !== 'object' || Array.isArray(nodes)) throw new Error('Studio graph provider returned an invalid graph');
   return graph;
 }
 
@@ -39,8 +59,9 @@ export function registerStudioNodeSelector(selector) {
 
 export function selectStudioNode(nodeId) {
   if (!nodeSelector) throw new Error('Studio node selector is not registered');
-  const id = String(nodeId ?? '').trim();
-  if (!id) throw new Error('Studio node selection requires a non-empty node id');
+  if (typeof nodeId !== 'string' || !nodeId.trim()) throw new Error('Studio node selection requires a non-empty string node id');
+  const id = nodeId.trim();
+  if (id.length > MAX_STUDIO_NODE_ID_CHARS) throw new Error(`Studio node selection id exceeds ${MAX_STUDIO_NODE_ID_CHARS} characters`);
   return nodeSelector(id);
 }
 
@@ -55,7 +76,7 @@ export function getStudioModelRouter() {
   if (!modelRouterProvider) return null;
   const router = modelRouterProvider();
   if (router == null) return null;
-  if (typeof router.execute !== 'function' || typeof router.list !== 'function') throw new Error('Studio model router provider returned an invalid router');
+  if (!hasDataMethod(router, 'execute') || !hasDataMethod(router, 'list')) throw new Error('Studio model router provider returned an invalid router');
   return router;
 }
 
