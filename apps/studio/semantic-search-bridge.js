@@ -21,10 +21,25 @@ let state = {
   superseded: false,
 };
 
+function routerDataMethod(router, name) {
+  if (!router || (typeof router !== 'object' && typeof router !== 'function')) return null;
+  let owner = router;
+  while (owner) {
+    const descriptor = Object.getOwnPropertyDescriptor(owner, name);
+    if (descriptor) return Object.hasOwn(descriptor, 'value') && typeof descriptor.value === 'function' ? descriptor.value.bind(router) : null;
+    owner = Object.getPrototypeOf(owner);
+  }
+  return null;
+}
+
 export function semanticSearchEmbeddingAvailable(router) {
-  if (!router || typeof router.list !== 'function' || typeof router.execute !== 'function') return false;
-  try { return router.list('embed').length > 0; }
-  catch { return false; }
+  const execute = routerDataMethod(router, 'execute');
+  const list = routerDataMethod(router, 'list');
+  if (!execute || !list) return false;
+  try {
+    const backends = list('embed');
+    return Array.isArray(backends) && backends.length > 0;
+  } catch { return false; }
 }
 
 function resolveRouter() {

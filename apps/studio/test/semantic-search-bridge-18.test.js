@@ -76,7 +76,28 @@ test('embedding refinement is advertised only for a compatible router with an em
   assert.equal(semanticSearchEmbeddingAvailable({ execute() {}, list() { return []; } }), false);
   assert.equal(semanticSearchEmbeddingAvailable({ execute() {}, list(operation) { return operation === 'embed' ? [{ id: 'local-embed' }] : []; } }), true);
   assert.equal(semanticSearchEmbeddingAvailable({ execute() {}, list() { throw new Error('offline'); } }), false);
+  assert.equal(semanticSearchEmbeddingAvailable({ execute() {}, list() { return { length: 1 }; } }), false);
   assert.equal(semanticSearchEmbeddingAvailable({ list() { return [{ id: 'embedder' }]; } }), false);
+
+  class PrototypeRouter {
+    execute() {}
+    list(operation) { return operation === 'embed' ? [{ id: 'prototype-embed' }] : []; }
+  }
+  assert.equal(semanticSearchEmbeddingAvailable(new PrototypeRouter()), true);
+});
+
+test('embedding capability detection rejects router accessors without executing them', () => {
+  let executeGetterCalls = 0;
+  const executeGetterRouter = { list() { return [{ id: 'embedder' }]; } };
+  Object.defineProperty(executeGetterRouter, 'execute', { enumerable: true, get() { executeGetterCalls += 1; return () => {}; } });
+  assert.equal(semanticSearchEmbeddingAvailable(executeGetterRouter), false);
+  assert.equal(executeGetterCalls, 0);
+
+  let listGetterCalls = 0;
+  const listGetterRouter = { execute() {} };
+  Object.defineProperty(listGetterRouter, 'list', { enumerable: true, get() { listGetterCalls += 1; return () => [{ id: 'embedder' }]; } });
+  assert.equal(semanticSearchEmbeddingAvailable(listGetterRouter), false);
+  assert.equal(listGetterCalls, 0);
 });
 
 test('semantic search panel escapes graph labels and never renders embedding vectors', () => {
