@@ -135,3 +135,78 @@ test('direct lexical search supersedes an older async semantic search', async ()
   assert.equal(session.snapshot().query,'blue');
   assert.deepEqual(lexical.results.map(r=>r.id),['b']);
 });
+
+test('semantic search constructor rejects accessor-bearing dependencies without executing them', () => {
+  let optionGetterCalls=0;const options={};Object.defineProperty(options,'getGraph',{enumerable:true,get(){optionGetterCalls+=1;return()=>graph();}});
+  assert.throws(()=>new StudioSemanticSearchSession(options),/constructor options must contain enumerable data fields only/);assert.equal(optionGetterCalls,0);
+  let routerGetterCalls=0;const router={};Object.defineProperty(router,'execute',{enumerable:true,get(){routerGetterCalls+=1;return()=>{};}});
+  assert.throws(()=>createSession({getGraph:()=>graph(),router}),/router execute must be a data method/);assert.equal(routerGetterCalls,0);
+  let cacheGetterCalls=0;const cache={};Object.defineProperty(cache,'getOrCreate',{enumerable:true,get(){cacheGetterCalls+=1;return async()=>({index});}});
+  assert.throws(()=>createSession({getGraph:()=>graph(),router:{execute(){}},embeddingCache:cache}),/embedding cache getOrCreate must be a data method/);assert.equal(cacheGetterCalls,0);
+});
+
+test('semantic search validates query and options before lexical or model work', async () => {
+  let lexicalCalls=0;const session=new StudioSemanticSearchSession({getGraph:()=>graph(),lexicalSearch:(...args)=>{lexicalCalls+=1;return lexicalSearch(...args);},embedQuery,sourceFingerprint});
+  let getterCalls=0;const options={};Object.defineProperty(options,'limit',{enumerable:true,get(){getterCalls+=1;return 5;}});
+  await assert.rejects(()=>session.search('sunset',options),/search options must contain enumerable data fields only/);assert.equal(getterCalls,0);assert.equal(lexicalCalls,0);
+  await assert.rejects(()=>session.search('sunset',{limit:'5'}),/limit must be an integer/);assert.equal(lexicalCalls,0);
+  await assert.rejects(()=>session.search('sunset',{useEmbeddings:'false'}),/useEmbeddings must be a boolean/);assert.equal(lexicalCalls,0);
+  await assert.rejects(()=>session.search('sunset',{maxDocuments:'1'}),/maxDocuments must be an integer/);assert.equal(lexicalCalls,0);
+  await assert.rejects(()=>session.search('sunset',{maxScalars:2_000_001}),/maxScalars must be an integer/);assert.equal(lexicalCalls,0);
+  await assert.rejects(()=>session.search('sunset',{batchSize:257}),/batchSize must be an integer/);assert.equal(lexicalCalls,0);
+  await assert.rejects(()=>session.search('x'.repeat(4097)),/query exceeds 4096 characters/);assert.equal(lexicalCalls,0);
+  let abortedGetterCalls=0;const forgedSignal={};Object.defineProperty(forgedSignal,'aborted',{enumerable:true,get(){abortedGetterCalls+=1;return false;}});
+  await assert.rejects(()=>session.search('sunset',{signal:forgedSignal}),/signal must be an AbortSignal/);assert.equal(abortedGetterCalls,0);assert.equal(lexicalCalls,0);
+});
+
+test('semantic search snapshots routing policy before asynchronous cache work', async () => {
+  const policy={deniedBackendIds:[]};let seenCachePolicy=null,seenEmbedPolicy=null;
+  const cache={getOrCreate:async(_graph,options)=>{seenCachePolicy=options.policy;policy.deniedBackendIds.push('embedder');return{index,cached:false,key:'k'};}};
+  const router={execute(){}};
+  const session=createSession({getGraph:()=>graph(),router,embeddingCache:cache,embedQuery:async(_router,_index,_query,options)=>{seenEmbedPolicy=options.policy;return[{id:'c',kind:'asset',name:'Sunset Ocean',score:.9}];}});
+  const result=await session.search('sunset',{policy});
+  assert.equal(result.mode,'hybrid');assert.notEqual(seenCachePolicy,policy);assert.equal(seenCachePolicy.deniedBackendIds.length,0);assert.equal(seenEmbedPolicy.deniedBackendIds.length,0);assert.deepEqual(policy.deniedBackendIds,['embedder']);
+});
+
+test('semantic search presentation state drops vector payloads and rejects result accessors without executing them', async () => {
+  const vectorSession=new StudioSemanticSearchSession({getGraph:()=>graph(),lexicalSearch:()=>[{id:'a',kind:'asset',name:'Red Sunset',score:1,vector:[1,2,3],sources:JSON.parse('{"__proto__":["safe"]}')} ]});
+  const clean=await vectorSession.search('sunset',{useEmbeddings:false});
+  assert.equal(JSON.stringify(clean).includes('vector'),false);assert.deepEqual(clean.results[0].sources.__proto__,['safe']);assert.equal(Object.getPrototypeOf(clean.results[0].sources),Object.prototype);
+
+  let getterCalls=0;const forged={id:'a',kind:'asset',name:'Red Sunset',score:1};Object.defineProperty(forged,'vector',{enumerable:true,get(){getterCalls+=1;return[1,2,3];}});
+  const forgedSession=new StudioSemanticSearchSession({getGraph:()=>graph(),lexicalSearch:()=>[forged]});
+  await assert.rejects(()=>forgedSession.search('sunset',{useEmbeddings:false}),/objects must contain enumerable data properties only/);assert.equal(getterCalls,0);
+
+  const sparse=[];sparse.length=1;
+  const sparseSession=new StudioSemanticSearchSession({getGraph:()=>graph(),lexicalSearch:()=>sparse});
+  await assert.rejects(()=>sparseSession.search('sunset',{useEmbeddings:false}),/must contain enumerable data results only/);
+});
+
+test('semantic search cache and error snapshots never execute injected getters or toString', async () => {
+  let cachedGetterCalls=0;const cacheResult={index};Object.defineProperty(cacheResult,'cached',{enumerable:true,get(){cachedGetterCalls+=1;return true;}});
+  const session=createSession({getGraph:()=>graph(),router:{execute(){}},embeddingCache:{getOrCreate:async()=>cacheResult}});
+  const cacheFallback=await session.search('sunset');
+  assert.equal(cacheFallback.mode,'lexical-fallback');assert.equal(cachedGetterCalls,0);
+
+  const pruneSession=createSession({getGraph:()=>graph(),router:{execute(){}},embeddingCache:{getOrCreate:async()=>({index,cachePrune:'invalid'})}});
+  const pruneFallback=await pruneSession.search('sunset');
+  assert.equal(pruneFallback.mode,'lexical-fallback');assert.match(pruneFallback.error.message,/cache prune must be an object/);
+
+  const primitiveSession=createSession({getGraph:()=>graph(),router:{execute(){}},embeddingCache:{getOrCreate:async()=>false}});
+  const primitiveFallback=await primitiveSession.search('sunset');
+  assert.equal(primitiveFallback.mode,'lexical-fallback');assert.match(primitiveFallback.error.message,/cache result must be an object/);
+
+  const oversizedIndexSession=createSession({getGraph:()=>graph(),router:{execute(){}},embeddingCache:{getOrCreate:async()=>({index:{...index,dimensions:4097}})}});
+  const oversizedIndexFallback=await oversizedIndexSession.search('sunset');
+  assert.equal(oversizedIndexFallback.mode,'lexical-fallback');assert.match(oversizedIndexFallback.error.message,/index dimensions are invalid/);
+
+  const primitiveErrorSession=createSession({getGraph:()=>graph(),router:{execute(){}},embeddingCache:{getOrCreate:async()=>{throw false;}}});
+  const primitiveErrorFallback=await primitiveErrorSession.search('sunset');
+  assert.equal(primitiveErrorFallback.mode,'lexical-fallback');assert.equal(primitiveErrorFallback.error.message,'Semantic search failed');
+
+  let messageGetterCalls=0,codeGetterCalls=0,toStringCalls=0;const error={toString(){toStringCalls+=1;return'secret';}};
+  Object.defineProperty(error,'message',{enumerable:true,get(){messageGetterCalls+=1;return'secret';}});Object.defineProperty(error,'code',{enumerable:true,get(){codeGetterCalls+=1;return'SECRET';}});
+  const errorSession=createSession({getGraph:()=>graph(),router:{execute(){}},embeddingCache:{getOrCreate:async()=>{throw error;}}});
+  const failure=await errorSession.search('sunset');
+  assert.equal(failure.error.message,'Semantic search failed');assert.equal(failure.error.code,null);assert.equal(messageGetterCalls,0);assert.equal(codeGetterCalls,0);assert.equal(toStringCalls,0);
+});
