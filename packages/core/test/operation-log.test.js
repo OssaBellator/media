@@ -10,3 +10,48 @@ test('sequence gaps and broken previous checksums are rejected',()=>{const log=a
 test('replay applies validated transactions in order',()=>{let log=createOperationLog({projectId:'p'});log=appendOperationLog(log,tx('t1',2));log=appendOperationLog(log,tx('t2',3));const result=replayOperationLog(10,log,(state,transaction)=>state+transaction.operations.reduce((sum,op)=>sum+op.value,0));assert.equal(result,15);});
 test('truncate produces a valid recovery prefix that can branch',()=>{let log=createOperationLog({projectId:'p'});log=appendOperationLog(log,tx('t1',1));log=appendOperationLog(log,tx('t2',2));const prefix=truncateOperationLog(log,1),branch=appendOperationLog(prefix,tx('t3',7));assert.equal(branch.entries.length,2);assert.equal(branch.entries[1].sequence,2);assert.equal(branch.entries[1].previousChecksum,branch.entries[0].checksum);validateOperationLog(branch);});
 test('non-JSON values are rejected instead of being silently normalized',()=>{const log=createOperationLog({projectId:'p'});assert.throws(()=>appendOperationLog(log,{id:'t',label:'bad',operations:[{value:NaN}],metadata:{}}),/finite numbers/);assert.throws(()=>appendOperationLog(log,{id:'t',label:'bad',operations:[],metadata:{value:undefined}}),/undefined/);});
+
+test('canonical operation-log JSON rejects accessors without executing them',()=>{
+  let objectGetterCalls=0;
+  const object={safe:true};
+  Object.defineProperty(object,'secret',{enumerable:true,get(){objectGetterCalls+=1;return'unsafe';}});
+  assert.throws(()=>canonicalOperationLogJson(object),/enumerable data properties only/);
+  assert.equal(objectGetterCalls,0);
+
+  let arrayGetterCalls=0;
+  const array=[];
+  Object.defineProperty(array,'0',{enumerable:true,get(){arrayGetterCalls+=1;return'unsafe';}});
+  array.length=1;
+  assert.throws(()=>canonicalOperationLogJson(array),/dense enumerable data arrays/);
+  assert.equal(arrayGetterCalls,0);
+});
+
+test('operation-log public boundaries reject getter-bearing logs, transactions and options without execution',()=>{
+  const log=createOperationLog({projectId:'p'});
+  let transactionGetterCalls=0;
+  const transaction={label:'Edit',operations:[],metadata:{}};
+  Object.defineProperty(transaction,'id',{enumerable:true,get(){transactionGetterCalls+=1;return't';}});
+  assert.throws(()=>appendOperationLog(log,transaction),/enumerable data properties only/);
+  assert.equal(transactionGetterCalls,0);
+
+  let logGetterCalls=0;
+  const forged={projectId:'p',baseRevision:0,metadata:{},entries:[]};
+  Object.defineProperty(forged,'schema',{enumerable:true,get(){logGetterCalls+=1;return'media.operation-log.v1';}});
+  assert.throws(()=>validateOperationLog(forged),/enumerable data properties only/);
+  assert.equal(logGetterCalls,0);
+
+  let optionGetterCalls=0;
+  const options={};
+  Object.defineProperty(options,'projectId',{enumerable:true,get(){optionGetterCalls+=1;return'p';}});
+  assert.throws(()=>createOperationLog(options),/enumerable data properties only/);
+  assert.equal(optionGetterCalls,0);
+});
+
+test('operation-log normalization preserves __proto__ as inert data',()=>{
+  const metadata=JSON.parse('{"__proto__":{"polluted":true}}');
+  const log=createOperationLog({projectId:'p',metadata});
+  assert.equal(Object.getPrototypeOf(log.metadata),Object.prototype);
+  assert.deepEqual(log.metadata.__proto__,{polluted:true});
+  assert.equal({}.polluted,undefined);
+  assert.match(canonicalOperationLogJson(log.metadata),/"__proto__"/);
+});
