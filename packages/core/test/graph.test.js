@@ -116,6 +116,60 @@ test("applies named transactions through the same operation boundary", () => {
   assert.equal(graph.nodes[graph.projectId].name, "Transaction");
 });
 
+test("transaction creation snapshots inert operations and metadata without implicit coercion", () => {
+  const graph = createMediaProject("Safe transaction");
+  const operation = { type: "node.update", nodeId: graph.projectId, patch: { name: "Renamed" } };
+  const metadata = { source: { kind: "human" } };
+  const transaction = createTransaction("Rename", [operation], metadata);
+  operation.patch.name = "Mutated later";
+  metadata.source.kind = "mutated";
+  assert.equal(transaction.operations[0].patch.name, "Renamed");
+  assert.equal(transaction.metadata.source.kind, "human");
+  assert.throws(() => createTransaction({ toString() { throw new Error("must not coerce"); } }, [], {}), /Transaction label must be a non-empty string/);
+});
+
+test("operation and transaction boundaries reject accessors without executing them", () => {
+  const graph = createMediaProject("Accessor safety");
+  let typeGetterCalls = 0;
+  const operation = { nodeId: graph.projectId, patch: { name: "Unsafe" } };
+  Object.defineProperty(operation, "type", { enumerable: true, get() { typeGetterCalls += 1; return "node.update"; } });
+  assert.throws(() => applyOperations(graph, [operation]), /enumerable data properties only/);
+  assert.equal(typeGetterCalls, 0);
+  assert.equal(graph.nodes[graph.projectId].name, "Accessor safety");
+
+  let patchGetterCalls = 0;
+  const patch = {};
+  Object.defineProperty(patch, "name", { enumerable: true, get() { patchGetterCalls += 1; return "Unsafe"; } });
+  assert.throws(() => createTransaction("Edit", [{ type: "node.update", nodeId: graph.projectId, patch }]), /enumerable data properties only/);
+  assert.equal(patchGetterCalls, 0);
+
+  let metadataGetterCalls = 0;
+  const metadata = {};
+  Object.defineProperty(metadata, "secret", { enumerable: true, get() { metadataGetterCalls += 1; return "unsafe"; } });
+  assert.throws(() => createTransaction("Edit", [], metadata), /enumerable data properties only/);
+  assert.equal(metadataGetterCalls, 0);
+
+  let transactionGetterCalls = 0;
+  const transaction = { operations: [] };
+  Object.defineProperty(transaction, "label", { enumerable: true, get() { transactionGetterCalls += 1; return "Edit"; } });
+  assert.throws(() => applyTransaction(graph, transaction), /label must be an enumerable data property/);
+  assert.equal(transactionGetterCalls, 0);
+});
+
+test("operation batches reject sparse arrays and accessor preflight options before graph mutation", () => {
+  const graph = createMediaProject("Sparse operations");
+  const operations = [];
+  operations.length = 1;
+  assert.throws(() => applyOperations(graph, operations), /dense data arrays/);
+  assert.equal(graph.nodes[graph.projectId].name, "Sparse operations");
+
+  let optionGetterCalls = 0;
+  const options = {};
+  Object.defineProperty(options, "enforceInvariants", { enumerable: true, get() { optionGetterCalls += 1; return false; } });
+  assert.throws(() => applyOperations(graph, [], options), /enumerable data properties only/);
+  assert.equal(optionGetterCalls, 0);
+});
+
 test("semantic invariants catch a clip whose relationship contract is broken", () => {
   let graph = projectWithAssets();
   graph = applyOperations(graph, planIntent(graph, "add everything to timeline").operations);
