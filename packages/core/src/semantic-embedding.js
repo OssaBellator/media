@@ -1,5 +1,9 @@
 import { normalizeBoundedModelInput, normalizeBoundedModelJsonObject } from './model-input.js';
-import { normalizeModelRoutingPolicy } from './model-router.js';
+import {
+  MAX_MODEL_ROUTING_BACKEND_IDS,
+  MAX_MODEL_ROUTING_BACKEND_ID_CHARS,
+  normalizeModelRoutingPolicy,
+} from './model-router.js';
 import { operationLogChecksum } from './operation-log.js';
 import { createPlannerSnapshot } from './providers.js';
 import {
@@ -33,12 +37,37 @@ const HYBRID_OPTION_KEYS = new Set(['limit', 'kinds', 'lexicalWeight', 'embeddin
 const EMBEDDING_INDEX_KEYS = new Set(['schema', 'projectId', 'sourceFingerprint', 'backendId', 'dimensions', 'documents', 'routing']);
 const EMBEDDING_DOCUMENT_KEYS = new Set(['id', 'kind', 'name', 'vector']);
 const EMBEDDING_ROUTE_KEYS = new Set(['backendId', 'count']);
+const ROUTED_EMBEDDING_RESULT_KEYS = new Set(['backendId', 'backend', 'output', 'attempts']);
 const MAX_EMBEDDING_INDEX_BYTES = 32 * 1024 * 1024;
 const MAX_EMBEDDING_INDEX_ENTRIES = 2_100_000;
 
+function dataMethod(value, name, label, required = true) {
+  if (!value || (typeof value !== 'object' && typeof value !== 'function')) {
+    if (required) throw new Error(`${label} must be an object`);
+    return null;
+  }
+  let owner = value;
+  while (owner) {
+    const descriptor = Object.getOwnPropertyDescriptor(owner, name);
+    if (descriptor) {
+      if (!Object.hasOwn(descriptor, 'value') || typeof descriptor.value !== 'function') throw new Error(`${label} ${name} must be a data method`);
+      return descriptor.value.bind(value);
+    }
+    owner = Object.getPrototypeOf(owner);
+  }
+  if (required) throw new Error(`${label} ${name} must be a function`);
+  return null;
+}
 function requireRouter(router) {
-  if (!router || typeof router.execute !== 'function') throw new Error('Semantic embedding requires a model router');
-  return router;
+  const execute = dataMethod(router, 'execute', 'Semantic embedding router');
+  const list = dataMethod(router, 'list', 'Semantic embedding router', false);
+  return { execute, list };
+}
+function normalizeSignal(signal) {
+  if (signal == null) return null;
+  const AbortSignalCtor = globalThis.AbortSignal;
+  if (typeof AbortSignalCtor !== 'function' || !(signal instanceof AbortSignalCtor)) throw new Error('Semantic embedding signal must be an AbortSignal');
+  return signal;
 }
 function requireString(value, label) {
   if (typeof value !== 'string' || !value.trim()) throw new Error(`${label} must be a non-empty string`);
@@ -83,6 +112,29 @@ function normalizeKinds(kinds) {
 }
 function rejectUnknownFields(value, allowedKeys, label) {
   for (const key of Object.keys(value)) if (!allowedKeys.has(key)) throw new Error(`Unsupported ${label} field: ${key}`);
+}
+function requireBackendId(value, label) {
+  const id = requireString(value, label);
+  if (id.length > MAX_MODEL_ROUTING_BACKEND_ID_CHARS) throw new Error(`${label} exceeds ${MAX_MODEL_ROUTING_BACKEND_ID_CHARS} characters`);
+  return id;
+}
+function normalizeRoutedEmbeddingResult(result) {
+  const safe = dataOptions(result, 'Semantic embedding routed result', ROUTED_EMBEDDING_RESULT_KEYS);
+  return {
+    backendId: requireBackendId(safe.backendId, 'Semantic embedding routed backend id'),
+    output: safe.output,
+  };
+}
+function firstListedBackendId(list) {
+  if (!Array.isArray(list) || list.length > MAX_MODEL_ROUTING_BACKEND_IDS) throw new Error('Semantic embedding router list must be a bounded array');
+  if (!list.length) return null;
+  const descriptor = Object.getOwnPropertyDescriptor(list, '0');
+  if (!descriptor?.enumerable || !Object.hasOwn(descriptor, 'value')) throw new Error('Semantic embedding router list must contain enumerable data entries only');
+  const entry = descriptor.value;
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) throw new Error('Semantic embedding listed backend must be an object');
+  const id = Object.getOwnPropertyDescriptor(entry, 'id');
+  if (!id?.enumerable || !Object.hasOwn(id, 'value')) throw new Error('Semantic embedding listed backend id must be an enumerable data property');
+  return requireBackendId(id.value, 'Semantic embedding listed backend id');
 }
 function embeddingText(document) {
   const terms = Object.keys(document.terms ?? {}).slice(0, 256).join(' ');
@@ -211,14 +263,14 @@ export function assertSemanticEmbeddingIndex(index, options = {}) {
 }
 
 export async function createSemanticEmbeddingIndex(graph, router, options = {}) {
-  requireRouter(router);
+  const routerMethods = requireRouter(router);
   const config = dataOptions(options, 'Semantic embedding create options', CREATE_OPTION_KEYS);
   const normalizedKinds = normalizeKinds(config.kinds ?? null);
   const documentLimit = boundedInteger(config.maxDocuments, 'Semantic embedding maxDocuments', 1024, MAX_SEMANTIC_EMBEDDING_DOCUMENTS);
   const scalarLimit = boundedInteger(config.maxScalars, 'Semantic embedding maxScalars', MAX_SEMANTIC_EMBEDDING_SCALARS, MAX_SEMANTIC_EMBEDDING_SCALARS);
   const size = boundedInteger(config.batchSize, 'Semantic embedding batchSize', DEFAULT_BATCH_SIZE, 256);
   const policy = normalizeModelRoutingPolicy(config.policy ?? {});
-  const signal = config.signal;
+  const signal = normalizeSignal(config.signal);
   const source = embeddingSource(graph, normalizedKinds);
   const sourceDocuments = source.lexical.documents.slice(0, documentLimit);
   const documents = [];
@@ -229,7 +281,7 @@ export async function createSemanticEmbeddingIndex(graph, router, options = {}) 
   for (let start = 0; start < sourceDocuments.length; start += size) {
     const batch = sourceDocuments.slice(start, start + size);
     const texts = batch.map(embeddingText);
-    const routed = await router.execute('embed', { texts }, { signal, policy, context: { purpose: 'semantic-index', projectId: graph.projectId } });
+    const routed = normalizeRoutedEmbeddingResult(await routerMethods.execute('embed', { texts }, { signal, policy, context: { purpose: 'semantic-index', projectId: graph.projectId } }));
     if (backendId == null) backendId = routed.backendId;
     else if (routed.backendId !== backendId) throw new Error(`Semantic embedding backend changed during index build: ${backendId} -> ${routed.backendId}`);
     const normalized = normalizeEmbedOutput(routed.output, batch.length, dimensions);
@@ -239,7 +291,7 @@ export async function createSemanticEmbeddingIndex(graph, router, options = {}) 
     for (let index = 0; index < batch.length; index += 1) documents.push({ id: batch[index].id, kind: batch[index].kind, name: batch[index].name, vector: normalized.vectors[index] });
     routing.push({ backendId: routed.backendId, count: batch.length });
   }
-  if (backendId == null && typeof router.list === 'function') backendId = router.list('embed', policy)[0]?.id ?? null;
+  if (backendId == null && routerMethods.list) backendId = firstListedBackendId(routerMethods.list('embed', policy));
   return assertSemanticEmbeddingIndex({
     schema: SEMANTIC_EMBEDDING_INDEX_SCHEMA,
     projectId: graph.projectId,
@@ -269,14 +321,14 @@ export function searchSemanticEmbeddingIndex(index, queryVector, options = {}) {
 }
 
 export async function embedSemanticQuery(router, index, query, options = {}) {
-  requireRouter(router);
+  const routerMethods = requireRouter(router);
   const safeIndex = assertSemanticEmbeddingIndex(index);
   const config = dataOptions(options, 'Semantic embedding query options', QUERY_OPTION_KEYS);
   if (typeof query !== 'string') throw new Error('Semantic embedding query must be a string');
   if (query.length > MAX_SEMANTIC_QUERY_CHARS) throw new Error(`Semantic embedding query exceeds ${MAX_SEMANTIC_QUERY_CHARS} characters`);
   if (!query.trim()) return [];
   const cleanPolicy = normalizeModelRoutingPolicy(config.policy ?? {});
-  const signal = config.signal;
+  const signal = normalizeSignal(config.signal);
   const limit = boundedInteger(config.limit, 'Semantic embedding query limit', 20, MAX_SEMANTIC_SEARCH_RESULTS);
   const kinds = normalizeKinds(config.kinds ?? null);
   const minimumScore = finiteNumber(config.minimumScore, 'Semantic embedding query minimumScore', -1, -1, 1);
@@ -284,7 +336,7 @@ export async function embedSemanticQuery(router, index, query, options = {}) {
   const queryPolicy = safeIndex.backendId
     ? { ...cleanPolicy, allowedBackendIds: callerAllowed == null || callerAllowed.has(safeIndex.backendId) ? [safeIndex.backendId] : [] }
     : cleanPolicy;
-  const routed = await router.execute('embed', { texts: [query.trim()] }, { signal, policy: queryPolicy, context: { purpose: 'semantic-query', projectId: safeIndex.projectId } });
+  const routed = normalizeRoutedEmbeddingResult(await routerMethods.execute('embed', { texts: [query.trim()] }, { signal, policy: queryPolicy, context: { purpose: 'semantic-query', projectId: safeIndex.projectId } }));
   if (safeIndex.backendId && routed.backendId !== safeIndex.backendId) throw new Error(`Semantic query backend ${routed.backendId} does not match index backend ${safeIndex.backendId}`);
   const normalized = normalizeEmbedOutput(routed.output, 1, safeIndex.dimensions);
   return searchSemanticEmbeddingIndex(safeIndex, normalized.vectors[0], { limit, kinds, minimumScore }).map((result) => ({ ...result, backendId: routed.backendId }));

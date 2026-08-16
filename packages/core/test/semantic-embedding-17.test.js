@@ -147,6 +147,61 @@ test('semantic embedding creation rejects accessor and coercive options before b
   assert.equal(backendCalls, 0);
 });
 
+test('semantic embedding captures router methods and rejects accessor or forged signal boundaries', async () => {
+  const graph = createGraph('Film');
+  let executeGetterCalls = 0;
+  const executeGetterRouter = { list() { return []; } };
+  Object.defineProperty(executeGetterRouter, 'execute', { enumerable: true, get() { executeGetterCalls += 1; return async () => ({ backendId: 'embedder', output: { vectors: [[1]] } }); } });
+  await assert.rejects(() => createSemanticEmbeddingIndex(graph, executeGetterRouter), /router execute must be a data method/);
+  assert.equal(executeGetterCalls, 0);
+
+  let listGetterCalls = 0;
+  const listGetterRouter = { execute: async () => ({ backendId: 'embedder', output: { vectors: [[1]] } }) };
+  Object.defineProperty(listGetterRouter, 'list', { enumerable: true, get() { listGetterCalls += 1; return () => []; } });
+  await assert.rejects(() => createSemanticEmbeddingIndex(graph, listGetterRouter), /router list must be a data method/);
+  assert.equal(listGetterCalls, 0);
+
+  let abortedGetterCalls = 0;
+  let signalRouterCalls = 0;
+  const forgedSignal = {};
+  Object.defineProperty(forgedSignal, 'aborted', { enumerable: true, get() { abortedGetterCalls += 1; return false; } });
+  const signalRouter = { execute: async () => { signalRouterCalls += 1; return { backendId: 'embedder', output: { vectors: [[1]] } }; } };
+  await assert.rejects(() => createSemanticEmbeddingIndex(graph, signalRouter, { signal: forgedSignal }), /signal must be an AbortSignal/);
+  assert.equal(abortedGetterCalls, 0);
+  assert.equal(signalRouterCalls, 0);
+
+  let multi = graph;
+  multi = applyOperations(multi, createCreativeObjectOperations(multi, { name: 'One', objectType: 'thing' }));
+  multi = applyOperations(multi, createCreativeObjectOperations(multi, { name: 'Two', objectType: 'thing' }));
+  let stableCalls = 0;
+  const stableRouter = {
+    execute: async (_operation, input) => {
+      stableCalls += 1;
+      if (stableCalls === 1) stableRouter.execute = async () => { throw new Error('swapped execute must not run'); };
+      return { backendId: 'stable', output: { vectors: input.texts.map(() => [1]) }, attempts: [] };
+    },
+  };
+  const index = await createSemanticEmbeddingIndex(multi, stableRouter, { kinds: ['object'], batchSize: 1 });
+  assert.equal(stableCalls, 2);
+  assert.equal(index.backendId, 'stable');
+});
+
+test('semantic embedding normalizes routed envelopes and listed backend identities without executing getters', async () => {
+  const graph = createGraph('Film');
+  let outputGetterCalls = 0;
+  const routed = { backendId: 'embedder', attempts: [] };
+  Object.defineProperty(routed, 'output', { enumerable: true, get() { outputGetterCalls += 1; return { vectors: [[1]] }; } });
+  await assert.rejects(() => createSemanticEmbeddingIndex(graph, { execute: async () => routed }, { maxDocuments: 1 }), /routed result must contain enumerable data fields only/);
+  assert.equal(outputGetterCalls, 0);
+
+  let idGetterCalls = 0;
+  const listed = {};
+  Object.defineProperty(listed, 'id', { enumerable: true, get() { idGetterCalls += 1; return 'embedder'; } });
+  const listRouter = { execute: async () => { throw new Error('empty semantic scope must not execute'); }, list() { return [listed]; } };
+  await assert.rejects(() => createSemanticEmbeddingIndex(graph, listRouter, { kinds: ['object'] }), /listed backend id must be an enumerable data property/);
+  assert.equal(idGetterCalls, 0);
+});
+
 test('semantic embedding kinds and cache identities reject implicit coercion', () => {
   const graph = createGraph('Film');
   let coercions = 0;
