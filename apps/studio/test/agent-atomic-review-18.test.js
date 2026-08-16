@@ -35,7 +35,8 @@ test('proposal session rejects partial selection for atomic-review plans', () =>
   const sparse = [0, 1]; sparse.length = 3;
   assert.throws(() => session.select(sparse), /dense integer indexes/);
   assert.doesNotThrow(() => session.select([2, 0, 1]));
-  assert.equal(session.snapshot().plan, plan);
+  assert.deepEqual(session.snapshot().plan, plan);
+  assert.notEqual(session.snapshot().plan, plan);
   const restylePlan = { ...plan, id: 'p2', metadata: { creativeObjectRestyle: { atomic: true } } };
   const restyleSession = sessionWith(graph, restylePlan);
   assert.throws(() => restyleSession.select([0, 1]), /atomic review/);

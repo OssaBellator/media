@@ -26,6 +26,25 @@ test('Agent proposal session adopts a prebuilt workflow result into the normal r
   assert.equal(graph.nodes[graph.projectId].name, 'After workflow');
 });
 
+test('Agent proposal adoption detaches caller plan state before review and apply', async () => {
+  let graph = createGraph('Before');
+  const prebuilt = createAgentPlan(graph, { intent: 'workflow result', summary: 'Ready', providerId: 'workflow', operations: [{ type: 'node.update', nodeId: graph.projectId, patch: { name: 'Reviewed' } }] });
+  const session = new AgentProposalSession({
+    provider: provider(),
+    getGraph: () => graph,
+    commit: async (label, operations, metadata) => { graph = applyTransaction(graph, { id: 'tx-detached', label, operations, metadata, createdAt: 'now' }); },
+  });
+  const adopted = session.adopt(prebuilt);
+  prebuilt.summary = 'caller mutation';
+  prebuilt.operations[0].patch.name = 'Caller mutation';
+  adopted.plan.operations[0].patch.name = 'Snapshot mutation';
+  const state = session.snapshot();
+  assert.equal(state.plan.summary, 'Ready');
+  assert.equal(state.plan.operations[0].patch.name, 'Reviewed');
+  await session.apply();
+  assert.equal(graph.nodes[graph.projectId].name, 'Reviewed');
+});
+
 test('Agent proposal session refuses to adopt a plan bound to another project state', () => {
   const graph = createGraph('Before');
   const other = createGraph('Other');

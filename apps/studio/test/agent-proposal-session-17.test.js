@@ -12,6 +12,52 @@ function renameProvider(graph) {
   ] }) });
 }
 
+test('Agent proposal session constructor snapshots provider methods and rejects accessor options without execution', async () => {
+  const graph = createGraph('Before');
+  let originalCalls = 0;
+  let replacementCalls = 0;
+  let getterCalls = 0;
+  const provider = { id: 'mutable', label: 'Mutable', capabilities: ['plan'], plan: async () => { originalCalls += 1; return { summary: 'noop', operations: [] }; } };
+  const session = new AgentProposalSession({ provider, getGraph: () => graph, commit: async () => {} });
+  provider.plan = async () => { replacementCalls += 1; return { summary: 'replacement', operations: [] }; };
+  await session.propose('inspect');
+  assert.equal(originalCalls, 1);
+  assert.equal(replacementCalls, 0);
+
+  const forgedProvider = { id: 'forged', label: 'Forged', capabilities: ['plan'] };
+  Object.defineProperty(forgedProvider, 'plan', { enumerable: true, get() { getterCalls += 1; return async () => ({ summary: 'noop', operations: [] }); } });
+  assert.throws(() => new AgentProposalSession({ provider: forgedProvider, getGraph: () => graph, commit: async () => {} }), /plan must be a data method/);
+  const options = { getGraph: () => graph, commit: async () => {} };
+  Object.defineProperty(options, 'provider', { enumerable: true, get() { getterCalls += 1; return provider; } });
+  assert.throws(() => new AgentProposalSession(options), /session options must contain enumerable data fields only/);
+  assert.equal(getterCalls, 0);
+});
+
+test('Agent proposal session snapshots expose detached plans instead of mutable pending state', async () => {
+  const graph = createGraph('Before');
+  const session = new AgentProposalSession({ provider: renameProvider(graph), getGraph: () => graph, commit: async () => {} });
+  const first = await session.propose('rename it');
+  first.plan.summary = 'external mutation';
+  first.plan.operations[0].patch.name = 'External';
+  const second = session.snapshot();
+  assert.equal(second.plan.summary, 'Rename project');
+  assert.equal(second.plan.operations[0].patch.name, 'Agent name');
+  assert.notEqual(first.plan, second.plan);
+});
+
+test('Agent proposal stale detection does not inspect arbitrary thrown error accessors', async () => {
+  const graph = createGraph('Before');
+  let fail = false;
+  let codeGetterCalls = 0;
+  const hostile = {};
+  Object.defineProperty(hostile, 'code', { get() { codeGetterCalls += 1; return 'AGENT_PLAN_STALE'; } });
+  const session = new AgentProposalSession({ provider: renameProvider(graph), getGraph: () => { if (fail) throw hostile; return graph; }, commit: async () => {} });
+  await session.propose('rename it');
+  fail = true;
+  assert.throws(() => session.snapshot(), (error) => error === hostile);
+  assert.equal(codeGetterCalls, 0);
+});
+
 test('Agent proposal session proposes and reviews without mutating the project', async () => {
   const original = createGraph('Before');
   let graph = original;

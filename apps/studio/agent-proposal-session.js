@@ -1,4 +1,4 @@
-import { assertAgentPlanMatchesGraph, createAgentPlanTransaction, selectAgentPlanOperations } from '../../packages/core/src/agent-plan.js';
+import { AgentPlanStaleError, assertAgentPlan, assertAgentPlanMatchesGraph, createAgentPlanTransaction, selectAgentPlanOperations } from '../../packages/core/src/agent-plan.js';
 import { createAgentPlanReview } from '../../packages/core/src/agent-review.js';
 import { proposeWithProvider } from '../../packages/core/src/providers.js';
 import { normalizeStudioPersistContext } from './persistence-context.js';
@@ -7,7 +7,36 @@ function requireFunction(value, label) {
   if (typeof value !== 'function') throw new Error(`${label} must be a function`);
   return value;
 }
+function dataMethod(value, key, label) {
+  if (!value || (typeof value !== 'object' && typeof value !== 'function')) throw new Error(`${label} must be an object`);
+  let current = value;
+  while (current) {
+    const descriptor = Object.getOwnPropertyDescriptor(current, key);
+    if (descriptor) {
+      if (!Object.hasOwn(descriptor, 'value') || typeof descriptor.value !== 'function') throw new Error(`${label} ${key} must be a data method`);
+      return descriptor.value.bind(value);
+    }
+    current = Object.getPrototypeOf(current);
+  }
+  throw new Error(`${label} ${key} must be a data method`);
+}
+function ownData(value, key, label) {
+  const descriptor = value && (typeof value === 'object' || typeof value === 'function') ? Object.getOwnPropertyDescriptor(value, key) : null;
+  if (!descriptor) return undefined;
+  if (!descriptor.enumerable || !Object.hasOwn(descriptor, 'value')) throw new Error(`${label} ${key} must be an enumerable data field`);
+  return descriptor.value;
+}
+function snapshotPlannerProvider(provider) {
+  const plan = dataMethod(provider, 'plan', 'Agent proposal planner provider');
+  const clean = { plan };
+  for (const key of ['id', 'label', 'capabilities']) {
+    const value = ownData(provider, key, 'Agent proposal planner provider');
+    if (value !== undefined) clean[key] = value;
+  }
+  return clean;
+}
 
+const SESSION_OPTION_KEYS = new Set(['provider', 'getGraph', 'commit']);
 const APPLY_OPTION_KEYS = new Set(['operationIndexes', 'metadata', 'persistContext']);
 
 function dataOptions(value, label, allowedKeys) {
@@ -51,11 +80,11 @@ function assertAtomicSelection(plan, operationIndexes) {
 }
 
 export class AgentProposalSession {
-  constructor({ provider, getGraph, commit } = {}) {
-    if (!provider || typeof provider.plan !== 'function') throw new Error('Agent proposal session requires a planner provider');
-    this.provider = provider;
-    this.getGraph = requireFunction(getGraph, 'Agent proposal getGraph');
-    this.commit = requireFunction(commit, 'Agent proposal commit');
+  constructor(options = {}) {
+    const config = dataOptions(options, 'Agent proposal session options', SESSION_OPTION_KEYS);
+    this.provider = snapshotPlannerProvider(config.provider);
+    this.getGraph = requireFunction(config.getGraph, 'Agent proposal getGraph');
+    this.commit = requireFunction(config.commit, 'Agent proposal commit');
     this.pending = null;
   }
 
@@ -63,24 +92,25 @@ export class AgentProposalSession {
 
   async propose(intent, context = {}, options = {}) {
     const plan = await proposeWithProvider(this.provider, this.getGraph(), intent, context, options);
-    this.pending = plan;
+    this.pending = assertAgentPlan(plan);
     return this.snapshot();
   }
 
   adopt(plan) {
     const graph = this.getGraph();
-    assertAgentPlanMatchesGraph(graph, plan);
-    createAgentPlanReview(graph, plan);
-    this.pending = plan;
+    const clean = assertAgentPlanMatchesGraph(graph, plan);
+    createAgentPlanReview(graph, clean);
+    this.pending = clean;
     return this.snapshot();
   }
 
   snapshot() {
     if (!this.pending) return { status: 'idle', plan: null, review: null, error: null };
+    const plan = assertAgentPlan(this.pending);
     try {
-      return { status: 'pending', plan: this.pending, review: createAgentPlanReview(this.getGraph(), this.pending), error: null };
+      return { status: 'pending', plan, review: createAgentPlanReview(this.getGraph(), plan), error: null };
     } catch (error) {
-      if (error?.code === 'AGENT_PLAN_STALE') return { status: 'stale', plan: this.pending, review: null, error };
+      if (error instanceof AgentPlanStaleError) return { status: 'stale', plan, review: null, error };
       throw error;
     }
   }
